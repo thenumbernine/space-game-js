@@ -111,20 +111,6 @@ void main() {
 				},
 				data : initialDataF32
 			});
-			this.nextPosTex = new glutil.Texture2D({
-				width : this.texSize,
-				height : this.texSize,
-				internalFormat : gl.RGBA,
-				format : gl.RGBA,
-				type : gl.FLOAT,
-				minFilter : gl.NEAREST,
-				magFilter : gl.NEAREST,
-				wrap : {
-					s : gl.REPEAT,
-					t : gl.REPEAT
-				},
-				data : initialDataF32
-			});
 			this.velTex = new glutil.Texture2D({
 				width : this.texSize,
 				height : this.texSize,
@@ -139,6 +125,35 @@ void main() {
 				},
 				data : initialDataF32
 			});
+			this.accelTex = new glutil.Texture2D({
+				width : this.texSize,
+				height : this.texSize,
+				internalFormat : gl.RGBA,
+				format : gl.RGBA,
+				type : gl.FLOAT,
+				minFilter : gl.NEAREST,
+				magFilter : gl.NEAREST,
+				wrap : {
+					s : gl.REPEAT,
+					t : gl.REPEAT
+				},
+				data : initialDataF32
+			});		
+			this.float4ScratchTex = new glutil.Texture2D({
+				width : this.texSize,
+				height : this.texSize,
+				internalFormat : gl.RGBA,
+				format : gl.RGBA,
+				type : gl.FLOAT,
+				minFilter : gl.NEAREST,
+				magFilter : gl.NEAREST,
+				wrap : {
+					s : gl.REPEAT,
+					t : gl.REPEAT
+				},
+				data : initialDataF32
+			});
+		
 			this.reduceTex = new glutil.Texture2D({
 				width : this.texSize,
 				height : this.texSize,
@@ -153,7 +168,7 @@ void main() {
 				},
 				data : initialDataI8
 			});
-			this.reduceTex2 = new glutil.Texture2D({
+			this.byte4ScratchTex = new glutil.Texture2D({
 				width : this.texSize,
 				height : this.texSize,
 				internalFormat : gl.RGBA,
@@ -235,7 +250,7 @@ void main() {
 				static : true
 			});
 
-			this.updateShader = new glutil.ShaderProgram({
+			this.updatePosShader = new glutil.ShaderProgram({
 				vertexPrecision : 'best',
 				vertexCode : mlstr(function(){/*
 attribute vec2 vertex;
@@ -267,7 +282,7 @@ void main() {
 		vec2 intersectOffset = intersect - playerPos.xy;
 
 		const float playerSize = 1.;
-		const float shotSize = .3;
+		const float shotSize = .1;
 		const float intersectCheckSize = .5 * (playerSize + shotSize);
 		if (abs(intersectOffset.x) < intersectCheckSize &&
 			abs(intersectOffset.y) < intersectCheckSize)
@@ -285,7 +300,43 @@ void main() {
 					velTex : 1
 				},
 			});
-			gl.useProgram(null);
+			
+			//just like above except without the collision check
+			//TODO separate collision check into its own shader and just use one IntegrateEuler shader?
+			// then we wouldn't have to have a separate reduce shader for moving collision flag from 3rd to 0th channel
+			//the tradeoff is it would be more tedious to do sweeping collisions 
+			//-- intentionally keeping track of the last pos tex, or not touching the float4 scratch tex
+			this.updateVelShader = new glutil.ShaderProgram({
+				vertexPrecision : 'best',
+				vertexCode : mlstr(function(){/*
+attribute vec2 vertex;
+attribute vec2 texCoord;
+varying vec2 pos;
+void main() {
+	pos = texCoord;
+	gl_Position = vec4(vertex, 0., 1.);
+}
+*/}),
+				fragmentPrecision : 'best',
+				fragmentCode : mlstr(function(){/*
+varying vec2 pos;
+uniform sampler2D velTex;
+uniform sampler2D accelTex;
+uniform float dt;
+void main() {
+	vec3 vel = texture2D(velTex, pos).xyz;
+	vec3 accel = texture2D(accelTex, pos).xyz;
+
+	vel += accel * dt;
+	gl_FragColor = vec4(vel, 1.);
+}
+*/}),
+				uniforms : {
+					dt : 0,
+					velTex : 0,
+					accelTex : 1
+				},
+			});
 	
 			this.collisionReduceFirstShader = new glutil.ShaderProgram({
 				vertexPrecision : 'best',
@@ -375,6 +426,8 @@ void main() {
 			gl.useProgram(this.drawShader.obj);
 			gl.uniform1i(this.drawShader.uniforms.posTex.loc, 0);
 			gl.uniform1i(this.drawShader.uniforms.shotTex.loc, 1);
+		
+			gl.useProgram(null);
 
 			this.addCoordX = 0;
 			this.addCoordY = 0;
@@ -390,50 +443,87 @@ void main() {
 			gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.texSize, this.texSize, gl.RGBA, gl.FLOAT, initialDataF32);
 			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
 			gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.texSize, this.texSize, gl.RGBA, gl.FLOAT, initialDataF32);
+			gl.bindTexture(gl.TEXTURE_2D, this.accelTex.obj);
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.texSize, this.texSize, gl.RGBA, gl.FLOAT, initialDataF32);
 			gl.bindTexture(gl.TEXTURE_2D, null);
 		},
 		
 		update : function(dt) {
-			//update shots
 			gl.disable(gl.DEPTH_TEST);
 			gl.disable(gl.BLEND);
 			gl.disable(gl.CULL_FACE);
-			
 			gl.viewport(0, 0, this.texSize, this.texSize);
-		
 			gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo.obj);
-			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.nextPosTex.obj, 0);
+		
+			//update shot position
+		
+			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
+			this.fbo.check();
 	
 			gl.activeTexture(gl.TEXTURE1);
 			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
 			gl.activeTexture(gl.TEXTURE0);
 			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
 
-			gl.useProgram(this.updateShader.obj);
-			gl.uniform1f(this.updateShader.uniforms.dt.loc, dt);
+			gl.useProgram(this.updatePosShader.obj);
+			gl.uniform1f(this.updatePosShader.uniforms.dt.loc, dt);
 			if (game.player !== undefined) {
-				gl.uniform3fv(this.updateShader.uniforms.playerPos.loc, game.player.pos);
+				gl.uniform3fv(this.updatePosShader.uniforms.playerPos.loc, game.player.pos);
 			}
-		
-			this.fbo.check();
 
 			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
-			gl.enableVertexAttribArray(this.updateShader.attrs.vertex.loc);
-			gl.vertexAttribPointer(this.updateShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.enableVertexAttribArray(this.updatePosShader.attrs.vertex.loc);
+			gl.vertexAttribPointer(this.updatePosShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
 			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
-			gl.enableVertexAttribArray(this.updateShader.attrs.texCoord.loc);
-			gl.vertexAttribPointer(this.updateShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.enableVertexAttribArray(this.updatePosShader.attrs.texCoord.loc);
+			gl.vertexAttribPointer(this.updatePosShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
 			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-	
 
+			{
+				var tmp = this.posTex;
+				this.posTex = this.float4ScratchTex;
+				this.float4ScratchTex = tmp;
+			}
+
+			//update shot velocity 
+
+			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
+			this.fbo.check();
+
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, this.accelTex.obj);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
+
+			gl.useProgram(this.updateVelShader.obj);
+			gl.uniform1f(this.updateVelShader.uniforms.dt.loc, dt);		
+			
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
+			gl.enableVertexAttribArray(this.updateVelShader.attrs.vertex.loc);
+			gl.vertexAttribPointer(this.updateVelShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
+			gl.enableVertexAttribArray(this.updateVelShader.attrs.texCoord.loc);
+			gl.vertexAttribPointer(this.updateVelShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+			{
+				var tmp = this.velTex;
+				this.velTex = this.float4ScratchTex;
+				this.float4ScratchTex = tmp;
+			}
+
+			//done with texunit1
 			gl.activeTexture(gl.TEXTURE1);
 			gl.bindTexture(gl.TEXTURE_2D, null);
 			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, null);
 			
 			//now reduce to find if a collision occurred
 			//TODO how to do this for all ships, and not just the player?
 			// -- how about a low limit on the # of total ships, then just static unrolled for-loop in the shader?
 
+			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+			
 			//first shader reads from alpha channel
 			var shader = this.collisionReduceFirstShader;
 
@@ -445,29 +535,39 @@ void main() {
 				size /= 2;
 				if (size !== Math.floor(size)) throw 'got a npo2 size '+this.nx;
 				gl.viewport(0, 0, size, size);
-				
-				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.reduceTex2.obj, 0);
+			
+				//bind scratch texture to fbo
+				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.byte4ScratchTex.obj, 0);
 				this.fbo.check();
-				gl.clear(gl.COLOR_BUFFER_BIT);
-				this.quadObj.draw({
-					shader : shader,
-					uniforms : {
-						texsize : [this.texSize, this.texSize], 
-						viewsize : [size, size]
-					}
-				});
+			
+				//setup shader
+				gl.useProgram(shader.obj);
+				gl.uniform2f(shader.uniforms.texsize.loc, this.texSize, this.texSize);
+				gl.uniform2f(shader.uniforms.viewsize.loc, size, size);
 
+				//draw screen quad
+				gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
+				gl.enableVertexAttribArray(shader.attrs.vertex.loc);
+				gl.vertexAttribPointer(shader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
+				gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
+				gl.enableVertexAttribArray(shader.attrs.texCoord.loc);
+				gl.vertexAttribPointer(shader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
+				gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+				//swap current reduce texture and reduce fbo target tex
 				{
-					var tmp = this.reduceTex2;
-					this.reduceTex2 = this.reduceTex;
+					var tmp = this.byte4ScratchTex;
+					this.byte4ScratchTex = this.reduceTex;
 					this.reduceTex = tmp;
 				}
 
 				shader = this.collisionReduceShader;
 
+				//bind the last used tex (the reduceTex) to the current input of the next reduction
 				gl.bindTexture(gl.TEXTURE_2D, this.reduceTex.obj);
 			}
 			
+			gl.bindTexture(gl.TEXTURE_2D, null);
 			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.reduceTex.obj, 0);
 			var result = new Uint8Array(4);
 			gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, result);
@@ -475,36 +575,33 @@ void main() {
 				//for some reason we're getting a false positive on the very first frame
 				game.time > 0)
 			{
+				console.log(result[0], result[1], result[2], result[3]);
 				if (game.player !== undefined) {
 					game.player.takeDamage(Shot.prototype.damage, undefined, undefined);
 				}
+
 			}
 
-			gl.bindTexture(gl.TEXTURE_2D, null);
-			gl.bindBuffer(gl.ARRAY_BUFFER, null);
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+			gl.bindBuffer(gl.ARRAY_BUFFER, null);
 			gl.viewport(0, 0, glutil.canvas.width, glutil.canvas.height);
 			
 			gl.enable(gl.DEPTH_TEST);
 			gl.enable(gl.BLEND);
 			gl.enable(gl.CULL_FACE);
 	
-			{
-				var tmp = this.posTex;
-				this.posTex = this.nextPosTex;
-				this.nextPosTex = this.posTex;
-			}
-
 			gl.useProgram(defaultShader.obj);
 		},
 
-		add : function(newShotPos, newShotVel) {
+		add : function(newShotPos, newShotVel, newShotAccel) {
 			//writing a single pixel
 			// which is faster?  fbo with a 1-pixel viewport, or texsubimage of 1 pixel?
 			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
 			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotPos));
 			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
 			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotVel));
+			gl.bindTexture(gl.TEXTURE_2D, this.accelTex.obj);
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotAccel));
 			gl.bindTexture(gl.TEXTURE_2D, null);
 
 			//increment pointer in the framebuffer
@@ -651,7 +748,7 @@ void main() {
 			
 			//game logic: add extra enemies
 			if (this.time >= this.nextEnemyTime) {
-				this.nextEnemyTime = this.time + 1;
+				this.nextEnemyTime = this.time + 10;
 				var theta = Math.random() * Math.PI * 2;
 				var vel = vec3.fromValues(Math.cos(theta), Math.sin(theta), 1);
 				var groupCenter = vec3.fromValues(
@@ -693,12 +790,12 @@ void main() {
 	});
 	
 	/*var*/ worldBounds = {
-		min : vec3.fromValues(-20, -20, -50),
-		max : vec3.fromValues(20, 20, -5)
+		min : vec3.fromValues(-10, -10, -50),
+		max : vec3.fromValues(10, 10, 5)
 	};
 
 	Star = makeClass({
-		starfieldVelocity : 100,
+		starfieldVelocity : 200,
 		color : vec4.fromValues(1,1,1,1),
 		scale : 1,
 		zMin : worldBounds.min[2] * 10,
@@ -712,7 +809,7 @@ void main() {
 		resetXY : function() {
 			var angle = Math.random() * Math.PI * 2;
 			var maxBounds = Math.max(worldBounds.max[0], worldBounds.max[1]);
-			var r = rand(maxBounds * 1.1, maxBounds * 20);
+			var r = rand(maxBounds * 10, maxBounds * 30);
 			this.pos[0] = Math.cos(angle) * r;
 			this.pos[1] = Math.sin(angle) * r;
 		},
@@ -850,7 +947,6 @@ void main() {
 	
 	var Shot = makeClass({
 		super : GameObject,
-		speed : 4,
 		color : vec4.fromValues(0,1,1,1),
 		scale : .3,
 		damage : 1,
@@ -862,10 +958,6 @@ void main() {
 				if (args.owner !== undefined) {
 					this.owner = args.owner;
 					vec3.copy(this.pos, args.owner.pos);
-				}
-				if (args.speed !== undefined) this.speed = args.speed;
-				if (args.dir !== undefined) {
-					vec3.scale(this.vel, args.dir, this.speed);
 				}
 			}
 		},
@@ -895,7 +987,8 @@ void main() {
 			this.vel[1] = rand(-5, 5);
 			this.vel[2] = rand(-5, 5);
 			this.life = rand(.5, 1.5);
-			this.scale = rand(.05, .15);
+			this.scale = rand(.25, .75) * rand(.25, .75);
+			vec3.scale(this.vel, this.vel, 2 / (this.scale * vec3.length(this.vel)));	//smaller chunks go further
 		},
 		update : function(dt) {
 			Shrapnel.superProto.update.apply(this, arguments);
@@ -910,26 +1003,24 @@ void main() {
 			this.nextShotTime = 0;
 			if (args !== undefined) {
 				if (args.owner !== undefined) this.owner = args.owner;
-				if (args.shotSpeed !== undefined) this.shotSpeed = args.shotSpeed;
 			}
 		},
-		shoot : function(dx, dy, dz) {
+		shoot : function(vx, vy, vz, ax, ay, az) {
 			if (game.time < this.nextShotTime) return;
 			this.nextShotTime = game.time + this.reloadTime;	//reload time
-			
 			
 			if (this.owner == game.player) {
 				//create shots for the player
 				new Shot({
 					owner : this.owner,
-					speed : this.shotSpeed,
-					dir : vec3.fromValues(dx, dy, dz)
+					vel : vec3.fromValues(vx, vy, vz)
+					//TODO accel support for player shots
 				});
 			} else {
-				//var speed = this.shotSpeed !== undefined ? this.shotSpeed : Shot.prototype.speed;
 				shotSystem.add(
 					this.owner.pos,
-					vec3.fromValues(dx * this.shotSpeed, dy * this.shotSpeed, dz * this.shotSpeed));
+					vec3.fromValues(vx, vy, vz),
+					vec3.fromValues(ax, ay, az));
 			}
 		},
 
@@ -975,8 +1066,7 @@ void main() {
 				if (args.group !== undefined) this.group = args.group;
 			}
 			this.weapon = new BasicShotWeapon({
-				owner : this,
-				shotSpeed : 15
+				owner : this
 			});	
 		},
 		groupInit : function() {
@@ -1000,7 +1090,46 @@ void main() {
 		},
 		update : function(dt) {
 			GroupEnemy.superProto.update.apply(this, arguments);
-			this.weapon.shoot(0,0,1);		
+		
+			/* a few acceleration tricks ...
+			
+			intersect with player:
+			pi = initial shot position
+			vi = initial shot velocity
+			a = shot acceleration
+
+			pf = final shot position = player position
+			vf = final shot velocity
+
+			px = pxi + vxi * t + 1/2 ax * t^2
+			py = pyi + vyi * t + 1/2 ay * t^2
+			pz = pzi + vzi * t + 1/2 az * t^2
+
+			1/2 az t^2 + vzi t + pzi - pzf = 0
+			t = [-vzi +- sqrt(vzi^2 - az*(pzi-pzf)]/(az)
+			except when az = 0 we get
+			pzf = pzi + vzi * t	<- time to final z position
+			t = (pzf - pzi) / vzi
+
+			pxf = pxi + vxi * t + 1/2 axi * t^2
+			1/2 axi * t^2 = pxf - pxi - vxi * t
+			axi = 2 * (pxf - pxi) / t^2 - 2 * vxi / t
+			*/
+			var vz = 15;
+			var vx = 0;
+			var vy = 0;
+
+			var ax = 0;
+			var ay = 0;
+			var az = 0;
+			
+			if (game.player !== undefined) {
+				var t = (game.player.pos[2] - this.pos[2]) / vz;
+				ax = 2 * ((game.player.pos[0] - this.pos[0]) / t - vx) / t;
+				ay = 2 * ((game.player.pos[1] - this.pos[1]) / t - vy) / t;
+			}
+			this.weapon.shoot(vx, vy, vz, ax, ay, 0);
+			
 			if (this.group !== undefined && this.group.length > 1) {
 				// do some cool BOIDs routine
 				this.updateGroupCenter();
@@ -1025,6 +1154,7 @@ void main() {
 		super : Ship,
 		color : vec4.fromValues(1,1,0,.75),
 		maxHealth : 20,
+		removeWhenOOB : false,
 		init : function() {
 			Player.super.apply(this, arguments);
 			this.targetPos = vec3.create();
@@ -1032,8 +1162,7 @@ void main() {
 			this.aimPos[2] = worldBounds.min[2];
 			this.speed = 10;
 			this.weapon = new BasicShotWeapon({
-				owner : this,
-				shotSpeed : 20
+				owner : this
 			});
 		},
 		update : function(dt) {
@@ -1065,16 +1194,17 @@ void main() {
 			Player.superProto.update.apply(this, arguments);
 
 			if (this.shooting) {
-				var dirX = this.aimPos[0] - this.pos[0];
-				var dirY = this.aimPos[1] - this.pos[1];
-				var dirZ = this.aimPos[2] - this.pos[2];
-				var dirLen = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ);
-				this.weapon.shoot(dirX/dirLen, dirY/dirLen, dirZ/dirLen);
+				var velX = this.aimPos[0] - this.pos[0];
+				var velY = this.aimPos[1] - this.pos[1];
+				var velZ = this.aimPos[2] - this.pos[2];
+				var speed = 20;
+				var scalar = speed / Math.sqrt(velX*velX + velY*velY + velZ*velZ);
+				this.weapon.shoot(velX*scalar, velY*scalar, velZ*scalar, 0,0,0);
 			}
 		},
 		takeDamage : function(damage, inflicter, attacker) {
 			Player.superProto.takeDamage.apply(this, arguments);
-			console.log('hit and at',this.health);
+			//console.log('hit and at',this.health);
 		},
 		die : function(inflicter, attacker) {
 			//add lots of explosion bits 
