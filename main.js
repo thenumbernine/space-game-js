@@ -167,10 +167,42 @@ void main() {
 				},
 				data : initialDataI8
 			});
-			
 			this.fbo = new glutil.Framebuffer({
 				width : this.texSize,
 				height : this.texSize
+			});
+
+			var shotTexSize = 64;
+			var shotTexData = new Uint8Array(shotTexSize * shotTexSize * 4);
+			{
+				var e = 0;
+				for (var j = 0; j < shotTexSize; ++j) {
+					var y = (j + .5) / shotTexSize; 
+					var dy = 2 * (y - .5);
+					for (var i = 0; i < shotTexSize; ++i) {
+						var x = (i + .5) / shotTexSize; 
+						var dx = 2 * (x - .5);
+						var l = Math.sqrt(Math.max(0, 1 - dx*dx - dy*dy));
+						shotTexData[e++] = 255;
+						shotTexData[e++] = 255;
+						shotTexData[e++] = 255;
+						shotTexData[e++] = 255 * l;
+					}
+				}
+			}
+			this.shotTex = new glutil.Texture2D({
+				width : shotTexSize,
+				height : shotTexSize,
+				internalFormat : gl.RGBA,
+				format : gl.RGBA,
+				type : gl.UNSIGNED_BYTE,
+				minFilter : gl.NEAREST,
+				magFilter : gl.LINEAR,
+				wrap : {
+					s : gl.REPEAT,
+					t : gl.REPEAT
+				},
+				data : shotTexData
 			});
 
 			//in absense of PBOs or geom shader, this is what I'm stuck with
@@ -334,13 +366,15 @@ void main() {
 */}),
 				fragmentPrecision : 'best',
 				fragmentCode : mlstr(function(){/*
+uniform sampler2D shotTex;
 void main() {
-	gl_FragColor = vec4(1., 1., 0., 1.);
+	gl_FragColor = texture2D(shotTex, gl_PointCoord) * vec4(0., 1., 1., 1.);
 }
 */})
 			});
 			gl.useProgram(this.drawShader.obj);
 			gl.uniform1i(this.drawShader.uniforms.posTex.loc, 0);
+			gl.uniform1i(this.drawShader.uniforms.shotTex.loc, 1);
 
 			this.addCoordX = 0;
 			this.addCoordY = 0;
@@ -470,7 +504,7 @@ void main() {
 			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
 			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotPos));
 			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
-			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues(0, 0, 4, 0));//.apply(vec4, newShotVel));
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotVel));
 			gl.bindTexture(gl.TEXTURE_2D, null);
 
 			//increment pointer in the framebuffer
@@ -484,15 +518,31 @@ void main() {
 
 		draw : function() {
 			//bind the texcoord buffer, use the draw shader to override the vertex data with the position texture data
-			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+			gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+			gl.disable(gl.DEPTH_TEST);
+			
 			gl.useProgram(this.drawShader.obj);
+
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, this.shotTex.obj);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+			
 			gl.uniformMatrix4fv(this.drawShader.uniforms.projMat.loc, false, glutil.scene.projMat);
 			gl.uniform1f(this.drawShader.uniforms.screenWidth.loc, glutil.canvas.width);
 			gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
 			gl.enableVertexAttribArray(this.drawShader.attrs.vertex.loc);
 			gl.vertexAttribPointer(this.drawShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
 			gl.drawArrays(gl.POINTS, 0, this.texSize * this.texSize);
+			
 			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			
+			gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+			gl.enable(gl.DEPTH_TEST);
 		}
 	});
 
@@ -631,7 +681,6 @@ void main() {
 			this.time += dt;
 		},
 		draw : function() {
-			gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 			initDrawFrame();
 			for (var i = 0; i < this.stars.length; ++i) {
 				this.stars[i].draw();
@@ -802,7 +851,7 @@ void main() {
 	var Shot = makeClass({
 		super : GameObject,
 		speed : 4,
-		color : vec4.fromValues(1,1,0,1),
+		color : vec4.fromValues(0,1,1,1),
 		scale : .3,
 		damage : 1,
 		removeWhenOOB : true,
@@ -880,8 +929,7 @@ void main() {
 				//var speed = this.shotSpeed !== undefined ? this.shotSpeed : Shot.prototype.speed;
 				shotSystem.add(
 					this.owner.pos,
-					vec3.fromValues(0, 0, 4));
-					//vec3.fromValues(dx * speed, dy * speed, dz * speed));
+					vec3.fromValues(dx * this.shotSpeed, dy * this.shotSpeed, dz * this.shotSpeed));
 			}
 		},
 
@@ -920,14 +968,15 @@ void main() {
 
 	GroupEnemy = makeClass({
 		super : Enemy,
-		color : vec4.fromValues(0,1,0,1),
+		color : vec4.fromValues(1,0,1,1),
 		init : function(args) {
 			GroupEnemy.super.apply(this, arguments);
 			if (args !== undefined) {
 				if (args.group !== undefined) this.group = args.group;
 			}
 			this.weapon = new BasicShotWeapon({
-				owner : this
+				owner : this,
+				shotSpeed : 15
 			});	
 		},
 		groupInit : function() {
@@ -974,7 +1023,7 @@ void main() {
 
 	var Player = makeClass({
 		super : Ship,
-		color : vec4.fromValues(1,0,0,.5),
+		color : vec4.fromValues(1,1,0,.75),
 		maxHealth : 20,
 		init : function() {
 			Player.super.apply(this, arguments);
@@ -984,7 +1033,7 @@ void main() {
 			this.speed = 10;
 			this.weapon = new BasicShotWeapon({
 				owner : this,
-				shotSpeed : 20,
+				shotSpeed : 20
 			});
 		},
 		update : function(dt) {
@@ -1065,9 +1114,9 @@ void main() {
 		//update game objects
 		game.update(dt);
 		
-		game.draw();
-		
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 		shotSystem.draw();
+		game.draw();
 		
 		//test
 		//the renderr goes very fast.  20k quads at 60fps only because it was vsync'd
@@ -1092,18 +1141,18 @@ void main() {
 	var movePlayer = function(xf, yf) {
 		if (game.player === undefined) return;
 		var aspectRatio = glutil.canvas.width / glutil.canvas.height;
-		var playerZPlane = -game.player.pos[2];
-		game.player.targetPos[0] = (xf * 2 - 1) * aspectRatio * playerZPlane;
-		game.player.targetPos[1] = (1 - yf * 2) * playerZPlane;
+		var targetScale = -game.player.pos[2];
+		game.player.targetPos[0] = (xf * 2 - 1) * aspectRatio * targetScale;
+		game.player.targetPos[1] = (1 - yf * 2) * targetScale;
 		game.player.aimPos[0] = game.player.targetPos[0];
 		game.player.aimPos[1] = game.player.targetPos[0];
 	};
 	var aimPlayer = function(xf, yf) {
 		if (game.player === undefined) return;
 		var aspectRatio = glutil.canvas.width / glutil.canvas.height;
-		var playerZPlane = -game.player.pos[2];
-		game.player.aimPos[0] = (xf * 2 - 1) * aspectRatio * playerZPlane;
-		game.player.aimPos[1] = (1 - yf * 2) * playerZPlane;
+		var targetScale = -game.player.pos[2];
+		game.player.aimPos[0] = (xf * 2 - 1) * aspectRatio * targetScale;
+		game.player.aimPos[1] = (1 - yf * 2) * targetScale;
 		//exhaggerate
 		var exhaggeration = 2;
 		game.player.aimPos[0] += (game.player.aimPos[0] - game.player.targetPos[0]) * exhaggeration + game.player.targetPos[0];
@@ -1129,6 +1178,12 @@ void main() {
 	});
 	$(window).bind('touchmove', function(e) {
 		handleInputEvent(e.originalEvent.changedTouches[0]);
+	});
+	$(window).bind('touchstart', function(e) {
+		if (game.player !== undefined) game.player.shooting = true;
+	});
+	$(window).bind('touchend touchcancel', function(e) {
+		if (game.player !== undefined) game.player.shooting = false;
 	});
 });
 
