@@ -12,56 +12,372 @@ $(document).ready(function() {
 	gl.disable(gl.DITHER);
 	gl.enable(gl.CULL_FACE);
 	gl.enable(gl.DEPTH_TEST);
+	gl.enable(gl.BLEND);
+	gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);	//TODO sort all sprites by z?
 
-	glutil.onfps = function(fps) {
-		console.log('fps',fps);
-	};
-
-	/*var*/ quad = new glutil.SceneObject({
-		mode : gl.TRIANGLES,
-		shader : new glutil.ShaderProgram({
-			vertexPrecision : 'best',
-			vertexCode : mlstr(function(){/*
+	var defaultShader = new glutil.ShaderProgram({
+		vertexPrecision : 'best',
+		vertexCode : mlstr(function(){/*
 uniform mat4 projMat;
-uniform mat4 mvMat;
 attribute vec3 vertex;
-uniform float scale;
+attribute vec4 color;
+varying vec4 colorv;
 void main() {
-	gl_Position = projMat * mvMat * vec4(vertex * scale, 1.);
+	colorv = color;
+	gl_Position = projMat * vec4(vertex, 1.);
 }
 */}),
-			fragmentPrecision : 'best',
-			fragmentCode : mlstr(function(){/*
-uniform vec4 color;
+		fragmentPrecision : 'best',
+		fragmentCode : mlstr(function(){/*
+varying vec4 colorv;
 void main() {
-	gl_FragColor = color;
+	gl_FragColor = colorv;
 }
 */})
-		}),
-		attrs : {
-			vertex : new glutil.ArrayBuffer({
-				dim : 2,
-				data : [-.5,-.5, .5,-.5, .5,.5, .5,.5, -.5,.5, -.5,-.5]
-			})
-		},
-		static : false,
-		parent : null
 	});
 
+	var maxQuads = 10000;
+	/*var*/ quadVertexBuffer = gl.createBuffer();
+	/*var*/ quadVertexArray = new Float32Array(maxQuads * 6 * 7);
+	gl.bindBuffer(gl.ARRAY_BUFFER, quadVertexBuffer);
+	gl.bufferData(gl.ARRAY_BUFFER, quadVertexArray, gl.DYNAMIC_DRAW);
+
+	gl.useProgram(defaultShader.obj);
+	gl.enableVertexAttribArray(defaultShader.attrs.vertex.loc);
+	gl.enableVertexAttribArray(defaultShader.attrs.color.loc);
+	gl.vertexAttribPointer(defaultShader.attrs.vertex.loc, 3, gl.FLOAT, false, 7 * 4, 0);
+	gl.vertexAttribPointer(defaultShader.attrs.color.loc, 4, gl.FLOAT, false, 7 * 4, 3 * 4);
+	gl.useProgram(null);
+
+	/*var*/ quadIndex = 0;
+	var frames = 0;
+	var lastTime = Date.now();
+	var initDrawFrame = function() {
+		{
+			frames++;
+			thisTime = Date.now();
+			if (thisTime - lastTime > 1000) {
+				var fps = frames * 1000 / (thisTime - lastTime);
+				console.log('fps', fps);
+				frames = 0;
+				lastTime = thisTime;	
+			}
+		}
+	
+		quadIndex = 0;
+		glutil.scene.setupMatrices();
+	};
+
+	var finishDrawFrame = function() {
+		gl.useProgram(defaultShader.obj);
+		gl.uniformMatrix4fv(defaultShader.uniforms.projMat.loc, false, glutil.scene.projMat);
+		
+		//re-bind the vertex object
+		gl.bindBuffer(gl.ARRAY_BUFFER, quadVertexBuffer);
+		gl.enableVertexAttribArray(defaultShader.attrs.vertex.loc);
+		gl.enableVertexAttribArray(defaultShader.attrs.color.loc);
+		gl.vertexAttribPointer(defaultShader.attrs.vertex.loc, 3, gl.FLOAT, false, 7 * 4, 0);
+		gl.vertexAttribPointer(defaultShader.attrs.color.loc, 4, gl.FLOAT, false, 7 * 4, 3 * 4);
+		
+		gl.bufferSubData(gl.ARRAY_BUFFER, 0, quadVertexArray);
+		gl.drawArrays(gl.TRIANGLES, 0, quadIndex * 6);
+	};
+
+	var FloatTexture2D = makeClass({
+		super : glutil.Texture2D,
+		init : function(width, height) {
+			var args = {};
+			args.width = width;
+			args.height = height;
+			args.internalFormat = gl.RGB;
+			args.format = gl.RGB;
+			args.type = gl.FLOAT;
+			args.minFilter = gl.NEAREST;
+			args.magFilter = gl.NEAREST;
+			args.wrap = {
+				s : gl.REPEAT,
+				t : gl.REPEAT
+			};
+			args.data = new Float32Array(width * height * 4);
+			for (var i = 0; i < width * height * 4; ++i) {
+				args.data[i] = Infinity;
+			}
+			FloatTexture2D.super.call(this, args);
+		}
+	});
+
+
+	var ShotSystem = makeClass({
+		init : function() {
+			this.texSize = 256;
+			this.posTex = new FloatTexture2D(this.texSize, this.texSize);
+			this.nextPosTex = new FloatTexture2D(this.texSize, this.texSize);
+			this.velTex= new FloatTexture2D(this.texSize, this.texSize);
+			this.fbo = new glutil.Framebuffer({
+				width : this.texSize,
+				height : this.texSize
+			});
+
+			//in absense of PBOs or geom shader, this is what I'm stuck with
+			//store a lookup for each tex coord here.  pass it through the shader.
+			this.vertexBuffer = gl.createBuffer();
+			this.vertexArray = new Float32Array(this.texSize * this.texSize * 2);
+			for (var j = 0; j < this.texSize; ++j) {
+				for (var i = 0; i < this.texSize; ++i) {
+					this.vertexArray[0 + 2 * (i + this.texSize * j)] = (i + .5) / this.texSize;
+					this.vertexArray[1 + 2 * (i + this.texSize * j)] = (j + .5) / this.texSize;
+				}
+			}
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
+			gl.bufferData(gl.ARRAY_BUFFER, this.vertexArray, gl.STATIC_DRAW);
+
+			//quad obj for kernel
+			this.quadObj = new glutil.SceneObject({
+				mode : gl.TRIANGLE_STRIP,
+				attrs : {
+					vertex : new glutil.ArrayBuffer({
+						dim : 2,
+						data : [-1,-1, 1,-1, -1,1, 1,1]
+					}),
+					texCoord : new glutil.ArrayBuffer({
+						dim : 2,
+						data : [0,0, 1,0, 0,1, 1,1]
+					})
+				},
+				parent : null,
+				static : true
+			});
+
+			this.updateShader = new glutil.ShaderProgram({
+				vertexPrecision : 'best',
+				vertexCode : mlstr(function(){/*
+attribute vec2 vertex;
+attribute vec2 texCoord;
+varying vec2 pos;
+void main() {
+	pos = texCoord;
+	gl_Position = vec4(vertex, 0., 1.);
+}
+*/}),
+				fragmentPrecision : 'best',
+				fragmentCode : mlstr(function(){/*
+varying vec2 pos;
+uniform sampler2D posTex;
+uniform sampler2D velTex;
+uniform float dt;
+void main() {
+	vec3 shotPos = texture2D(posTex, pos).xyz;
+	vec3 shotVel = texture2D(velTex, pos).xyz;
+	shotPos += shotVel * dt;
+	shotPos -= shotVel * dt;
+	shotPos.z += 4. * dt;
+	gl_FragColor = vec4(shotPos, 1.);
+}
+*/}),
+				uniforms : {
+					dt : 'float'
+				},
+				texs : ['posTex', 'velTex']
+			});
+			gl.useProgram(this.updateShader.obj);
+			gl.uniform1i(this.updateShader.uniforms.posTex.obj, 0);
+			gl.uniform1i(this.updateShader.uniforms.velTex.obj, 1);
+			
+			this.drawShader = new glutil.ShaderProgram({
+				vertexPrecision : 'best',
+				vertexCode : mlstr(function(){/*
+attribute vec2 vertex;
+uniform sampler2D posTex;
+uniform mat4 projMat;
+uniform float screenWidth;
+void main() {
+	vec3 pos = texture2D(posTex, vertex).xyz;
+	gl_Position = projMat * vec4(pos, 1.);
+	gl_PointSize = .05 / gl_Position.w * screenWidth;
+}
+*/}),
+				fragmentPrecision : 'best',
+				fragmentCode : mlstr(function(){/*
+void main() {
+	gl_FragColor = vec4(1., 1., 0., 1.);
+}
+*/})
+			});
+			gl.useProgram(this.drawShader.obj);
+			gl.uniform1i(this.drawShader.uniforms.posTex.loc, 0);
+
+			this.addCoordX = 0;
+			this.addCoordY = 0;
+		},
+
+		update : function(dt) {
+			//update shots
+			gl.disable(gl.DEPTH_TEST);
+			gl.disable(gl.BLEND);
+			gl.disable(gl.CULL_FACE);
+			
+			gl.viewport(0, 0, this.texSize, this.texSize);
+		
+			gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo.obj);
+			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.nextPosTex.obj, 0);
+	
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+
+			gl.useProgram(this.updateShader.obj);
+			gl.uniform1f(this.updateShader.uniforms.dt.loc, dt);
+		
+			this.fbo.check();
+
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
+			gl.enableVertexAttribArray(this.updateShader.attrs.vertex.loc);
+			gl.vertexAttribPointer(this.updateShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
+			gl.enableVertexAttribArray(this.updateShader.attrs.texCoord.loc);
+			gl.vertexAttribPointer(this.updateShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+			
+			gl.bindBuffer(gl.ARRAY_BUFFER, null);
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.viewport(0, 0, glutil.canvas.width, glutil.canvas.height);
+			
+			gl.enable(gl.DEPTH_TEST);
+			gl.enable(gl.BLEND);
+			gl.enable(gl.CULL_FACE);
+	
+			{
+				var tmp = this.posTex;
+				this.posTex = this.nextPosTex;
+				this.nextPosTex = this.posTex;
+			}
+
+			gl.useProgram(defaultShader.obj);
+		},
+
+		add : function(newShotPos, newShotVel) {
+			//writing a single pixel
+			// which is faster?  fbo with a 1-pixel viewport, or texsubimage of 1 pixel?
+			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGB, gl.FLOAT, newShotPos);
+			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGB, gl.FLOAT, newShotVel);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+
+			//increment pointer in the framebuffer
+			++this.addCoordX;
+			if (this.addCoordX < this.texSize) return;
+			this.addCoordX = 0;
+			++this.addCoordY;
+			if (this.addCoordY < this.texSize) return;
+			this.addCoordY = 0;
+		},
+
+		draw : function() {
+			//bind the texcoord buffer, use the draw shader to override the vertex data with the position texture data
+			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+			gl.useProgram(this.drawShader.obj);
+			gl.uniformMatrix4fv(this.drawShader.uniforms.projMat.loc, false, glutil.scene.projMat);
+			gl.uniform1f(this.drawShader.uniforms.screenWidth.loc, glutil.canvas.width);
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
+			gl.enableVertexAttribArray(this.drawShader.attrs.vertex.loc);
+			gl.vertexAttribPointer(this.drawShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.drawArrays(gl.POINTS, 0, this.texSize * this.texSize);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+		}
+	});
+
+	/*var*/ shotSystem = new ShotSystem();
+
+	var drawQuad = function(pos, color, scale) {
+		if (quadIndex >= maxQuads) return;
+		scale *= .5;
+		var g = quadIndex * 6 * 7;
+	
+		//vertices
+		//colors
+		
+		quadVertexArray[g++] = pos[0] - scale;
+		quadVertexArray[g++] = pos[1] - scale;
+		quadVertexArray[g++] = pos[2];
+		quadVertexArray[g++] = color[0];
+		quadVertexArray[g++] = color[1];
+		quadVertexArray[g++] = color[2];
+		quadVertexArray[g++] = color[3];
+		
+		quadVertexArray[g++] = pos[0] + scale;
+		quadVertexArray[g++] = pos[1] - scale;
+		quadVertexArray[g++] = pos[2];
+		quadVertexArray[g++] = color[0];
+		quadVertexArray[g++] = color[1];
+		quadVertexArray[g++] = color[2];
+		quadVertexArray[g++] = color[3];
+		
+		quadVertexArray[g++] = pos[0] + scale;
+		quadVertexArray[g++] = pos[1] + scale;
+		quadVertexArray[g++] = pos[2];
+		quadVertexArray[g++] = color[0];
+		quadVertexArray[g++] = color[1];
+		quadVertexArray[g++] = color[2];
+		quadVertexArray[g++] = color[3];
+		
+		quadVertexArray[g++] = pos[0] + scale;
+		quadVertexArray[g++] = pos[1] + scale;
+		quadVertexArray[g++] = pos[2];
+		quadVertexArray[g++] = color[0];
+		quadVertexArray[g++] = color[1];
+		quadVertexArray[g++] = color[2];
+		quadVertexArray[g++] = color[3];
+		
+		quadVertexArray[g++] = pos[0] - scale;
+		quadVertexArray[g++] = pos[1] + scale;
+		quadVertexArray[g++] = pos[2];
+		quadVertexArray[g++] = color[0];
+		quadVertexArray[g++] = color[1];
+		quadVertexArray[g++] = color[2];
+		quadVertexArray[g++] = color[3];
+		
+		quadVertexArray[g++] = pos[0] - scale;
+		quadVertexArray[g++] = pos[1] - scale;
+		quadVertexArray[g++] = pos[2];
+		quadVertexArray[g++] = color[0];
+		quadVertexArray[g++] = color[1];
+		quadVertexArray[g++] = color[2];
+		quadVertexArray[g++] = color[3];
+
+		
+		++quadIndex;
+	};
+		
 	//game
+	
 	var Player;
+	var Enemy;
+	var GroupEnemy;
+	var Star;
+
 	var Game = makeClass({
+		maxStars : 100,
 		init : function() {
 			this.reset();
 		},
 		//call after init and assignment of 'game' global
 		start : function() {
+			for (var i = 0; i < this.maxStars; ++i) {
+				new Star();	//auto adds to game.stars
+			}
 			this.player = new Player({
 				pos : vec3.fromValues(0,0,-5)
 			});
 		},
 		reset : function() {
 			this.objs = [];
+			this.stars = [];	//update separately to not clog up the touch tests
 			this.time = 0;
 			this.nextEnemyTime = 3;
 		},
@@ -70,27 +386,30 @@ void main() {
 			for (var i = 0; i < this.objs.length; ++i) {
 				this.objs[i].update(dt);
 			}
+			for (var i = 0; i < this.stars.length; ++i) {
+				this.stars[i].update(dt);
+			}
 			for (var i = this.objs.length-1; i >= 0; --i) {
 				if (this.objs[i].remove) {
 					this.objs.splice(i, 1);
 				}
 			}
-				
+			
 			//game logic: add extra enemies
 			if (this.time >= this.nextEnemyTime) {
 				this.nextEnemyTime = this.time + 1;
 				var theta = Math.random() * Math.PI * 2;
 				var vel = vec3.fromValues(Math.cos(theta), Math.sin(theta), 1);
 				var groupCenter = vec3.fromValues(
-					rand(worldBounds.min[0] - 1, worldBounds.max[0] + 1),
-					rand(worldBounds.min[1] - 1, worldBounds.max[1] + 1),
+					rand(worldBounds.min[0] + 2, worldBounds.max[0] - 2),
+					rand(worldBounds.min[1] + 2, worldBounds.max[1] - 2),
 					worldBounds.min[2] + 1);
 				var spread = 1.5;
 				var waveSize = Math.floor(rand(2,6));
 				var group = [];
 				for (var i = 0; i < waveSize; ++i) {
 					var groupAngle = i / waveSize * Math.PI * 2;
-					var enemy = new Enemy({
+					var enemy = new GroupEnemy({
 						group : group,
 						pos : vec3.fromValues(
 							groupCenter[0] + spread * Math.cos(groupAngle),
@@ -100,15 +419,23 @@ void main() {
 					});
 					group.push(enemy);
 				}
+				for (var i = 0; i < group.length; ++i) {
+					group[i].groupInit();
+				}
 			}
 
 			this.time += dt;
 		},
 		draw : function() {
-			glutil.draw();
-			for (var i = 0; i < this.objs.length; ++i) {
+			gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+			initDrawFrame();
+			for (var i = 0; i < this.stars.length; ++i) {
+				this.stars[i].draw();
+			}
+			for (var i = this.objs.length-1; i >= 0; --i) {
 				this.objs[i].draw();
 			}
+			finishDrawFrame();
 		}
 	});
 	
@@ -117,6 +444,40 @@ void main() {
 		max : vec3.fromValues(20, 20, -5)
 	};
 
+	Star = makeClass({
+		starfieldVelocity : 100,
+		color : vec4.fromValues(1,1,1,1),
+		scale : 1,
+		zMin : worldBounds.min[2] * 10,
+		zMax : worldBounds.max[2] + 10,
+		init : function() {
+			this.pos = vec3.create();
+			this.resetXY();
+			this.pos[2] = rand(this.zMin, this.zMax);
+			game.stars.push(this);
+		},
+		resetXY : function() {
+			var angle = Math.random() * Math.PI * 2;
+			var maxBounds = Math.max(worldBounds.max[0], worldBounds.max[1]);
+			var r = rand(maxBounds * 1.1, maxBounds * 20);
+			this.pos[0] = Math.cos(angle) * r;
+			this.pos[1] = Math.sin(angle) * r;
+		},
+		update : function(dt) {
+			this.pos[2] += dt * this.starfieldVelocity;
+			if (this.pos[2] > this.zMax) {
+				this.pos[2] -= this.zMax - this.zMin;
+				this.resetXY();
+			}
+		},
+		draw : function() {
+			drawQuad(this.pos, this.color, this.scale);
+		}
+	});
+	
+	var mightTouchObj = [];
+	var mightTouchFrac = [];
+	var mightTouchLength = 0;
 	var GameObject = makeClass({
 		color : vec4.fromValues(1,1,1,1),
 		scale : 1,
@@ -131,37 +492,85 @@ void main() {
 		},
 		update : function(dt) {
 			//trace movement
-			var delta = vec3.create();
-			vec3.scale(delta, this.vel, dt);
-	
-			var dest = vec3.create();
-			vec3.add(dest, this.pos, delta);
+			var startX = this.pos[0];
+			var startY = this.pos[1];
+			var startZ = this.pos[2];
+		
+			var deltaX = this.vel[0] * dt;
+			var deltaY = this.vel[1] * dt;
+			var deltaZ = this.vel[2] * dt;
+
+			var destX = startX + deltaX;
+			var destY = startY + deltaY;
+			var destZ = startZ + deltaZ;
 
 			if (this.touch) {
+				mightTouchLength = 0;
 				for (var i = 0; i < game.objs.length; ++i) {
 					var o = game.objs[i];
 					if (o.remove) continue;
 					if (o == this) continue;
 					
 					//for now assume we're quads ...
-					var f = (o.pos[2] - this.pos[2]) / delta[2];
+					var f = (o.pos[2] - startZ) / deltaZ;
 					if (f < 0 || f > 1) continue;
 
-					var x = this.pos[0] + f * delta[0];
-					var y = this.pos[1] + f * delta[1];
+					var x = startX + f * deltaX;
+					var y = startY + f * deltaY;
 					var dx = x - o.pos[0];
 					var dy = y - o.pos[1];
 					if (Math.abs(dx) < (this.scale + o.scale) * .5 &&
 						Math.abs(dy) < (this.scale + o.scale) * .5)
 					{
-						//TODO proper physics?  store all objects we will touch and process in order? 
-						this.touch(o);
+						mightTouchObj[mightTouchLength] = o;
+						mightTouchFrac[mightTouchLength] = f;
+						++mightTouchLength;
 					}
-					if (this.remove) return;
+				}
+				//got all objects in our collision hull
+				//sort by fraction and check touch with each
+				if (mightTouchLength > 0) {
+					//small arrays, bubble sort has faster time
+					//that and I am sorting two arrays at once, so to use js sort i would merge them into one array
+					var swapped;
+					do {
+						swapped = false;
+						for (var i = 1; i < mightTouchLength; ++i) {
+							if (mightTouchFrac[i-1] > mightTouchFrac[i]) {
+								var tmp;
+								tmp = mightTouchFrac[i-1];
+								mightTouchFrac[i-1] = mightTouchFrac[i];
+								mightTouchFrac[i] = tmp;
+								tmp = mightTouchObj[i-1];
+								mightTouchObj[i-1] = mightTouchObj[i];
+								mightTouchObj[i] = tmp;
+								swapped = true;
+							}
+						}
+					} while (swapped);
+					//mightTouch.sort(function(a,b) { return a.frac - b.frac; });
+					
+					for (var i = 0; i < mightTouchLength; ++i) {
+						var o = mightTouchObj[i];
+						var f = mightTouchFrac[i];
+						this.pos[0] = startX + deltaX * f;
+						this.pos[1] = startY + deltaY * f;
+						this.pos[2] = startZ + deltaZ * f;
+						var stopped = this.touch(o);
+						if (this.remove) return;
+						if (stopped) {
+							destX = this.pos[0];
+							destY = this.pos[1];
+							destZ = this.pos[2];
+							break;
+						}
+					}
 				}
 			}
 
-			vec3.copy(this.pos, dest);
+			this.pos[0] = destX;
+			this.pos[1] = destY;
+			this.pos[2] = destZ;
 			
 			if (this.removeWhenOOB) {
 				if (this.pos[0] < worldBounds.min[0] || this.pos[0] > worldBounds.max[0] ||
@@ -181,20 +590,14 @@ void main() {
 			}
 		},
 		draw : function() {
-			vec3.copy(quad.pos, this.pos);
-			quad.draw({
-				uniforms : {
-					color : this.color,
-					scale : this.scale
-				}
-			});
+			drawQuad(this.pos, this.color, this.scale);
 		}
 	});
 	
 	var Shot = makeClass({
 		super : GameObject,
 		speed : 4,
-		color : vec4.fromValues(1,1,0,.5),
+		color : vec4.fromValues(1,1,0,1),
 		scale : .3,
 		damage : 1,
 		removeWhenOOB : true,
@@ -221,9 +624,11 @@ void main() {
 			}*/
 		},
 		touch : function(other) {
-			if (other == this.owner) return;
-			if (!other.takeDamage) return;
+			if (other == this.owner) return false;
+			if (!other.takeDamage) return false;	//return other.collides;  so objects can block shots even if they're not taking damage
 			other.takeDamage(this.damage, this, this.owner);
+			this.remove = true;
+			return true;
 		}
 	});
 
@@ -245,27 +650,48 @@ void main() {
 		}
 	});
 
+	var BasicShotWeapon = makeClass({
+		reloadTime : .2,
+		init : function(args) {
+			this.nextShotTime = 0;
+			if (args !== undefined) {
+				if (args.owner !== undefined) this.owner = args.owner;
+				if (args.shotSpeed !== undefined) this.shotSpeed = args.shotSpeed;
+			}
+		},
+		shoot : function(dx, dy, dz) {
+			if (game.time < this.nextShotTime) return;
+			this.nextShotTime = game.time + this.reloadTime;	//reload time
+			
+			
+			if (this.owner == game.player) {
+				//create shots for the player
+				new Shot({
+					owner : this.owner,
+					speed : this.shotSpeed,
+					dir : vec3.fromValues(dx, dy, dz)
+				});
+			} else {
+				//var speed = this.shotSpeed !== undefined ? this.shotSpeed : Shot.prototype.speed;
+				shotSystem.add(
+					this.owner.pos,
+					vec3.fromValues(0, 0, 4));
+					//vec3.fromValues(dx * speed, dy * speed, dz * speed));
+			}
+		},
+
+	});
+
 	var Ship = makeClass({
 		super : GameObject,
 		removeWhenOOB : true,
 		maxHealth : 1,
-		reloadTime : 1,
 		init : function(args) {
 			Ship.super.apply(this, arguments);
-			this.nextShotTime = 0;
 			this.health = this.maxHealth;
 			if (args !== undefined) {
 				if (args.health !== undefined) this.health = args.health;
 			}
-		},
-		shoot : function(dx,dy,dz) {
-			if (game.time < this.nextShotTime) return;
-			this.nextShotTime = game.time + this.reloadTime;	//reload time
-			new Shot({
-				owner : this,
-				speed : this.shotSpeed,
-				dir : vec3.fromValues(dx, dy, dz)
-			});
 		},
 		takeDamage : function(damage, inflicter, attacker) {
 			this.health -= damage;
@@ -283,45 +709,78 @@ void main() {
 		}
 	});
 
-	var Enemy = makeClass({
-		super : Ship,
+	Enemy = makeClass({
+		super : Ship
+	});
+
+	GroupEnemy = makeClass({
+		super : Enemy,
 		color : vec4.fromValues(0,1,0,1),
 		init : function(args) {
-			Enemy.super.apply(this, arguments);
+			GroupEnemy.super.apply(this, arguments);
 			if (args !== undefined) {
 				if (args.group !== undefined) this.group = args.group;
 			}
+			this.weapon = new BasicShotWeapon({
+				owner : this
+			});	
+		},
+		groupInit : function() {
+			if (this.group !== undefined) {
+				this.groupCenter = vec3.create();
+				this.updateGroupCenter();
+				var deltaX = this.pos[0] - this.groupCenter[0];
+				var deltaY = this.pos[1] - this.groupCenter[1];
+				this.vel[0] += -deltaY;
+				this.vel[1] += deltaX;
+			}
+		},
+		updateGroupCenter : function() {
+			this.groupCenter[0] = 0;
+			this.groupCenter[1] = 0;
+			this.groupCenter[2] = 0;
+			for (var i = 0; i < this.group.length; ++i) {
+				vec3.add(this.groupCenter, this.groupCenter, this.group[i].pos);
+			}
+			vec3.scale(this.groupCenter, this.groupCenter, 1/this.group.length);
 		},
 		update : function(dt) {
-			Enemy.superProto.update.apply(this, arguments);
-			this.shoot(0,0,1);		
-			if (this.group !== undefined) {
+			GroupEnemy.superProto.update.apply(this, arguments);
+			this.weapon.shoot(0,0,1);		
+			if (this.group !== undefined && this.group.length > 1) {
 				// do some cool BOIDs routine
-				var center = vec3.create();
-				for (var i = 0; i < this.group.length; ++i) {
-					vec3.add(center, center, this.group[i].pos);
-				}
-				vec3.scale(center, center, 1/this.group.length);
+				this.updateGroupCenter();
 				//now ... spin around it!
-				var delta = vec3.create();
-				vec3.sub(center, this.pos, delta);
-				vec3.scaleAndAdd(this.vel, this.vel, delta, .01);
+				var deltaX = this.groupCenter[0] - this.pos[0];
+				var deltaY = this.groupCenter[1] - this.pos[1];
+				var deltaZ = this.groupCenter[2] - this.pos[2];
+				this.vel[0] += deltaX * .1;
+				this.vel[1] += deltaY * .1;
+				this.vel[2] += deltaZ * .1;
+			}
+		},
+		die : function() {
+			GroupEnemy.superProto.die.apply(this, arguments);
+			if (this.group !== undefined) {
+				this.group.remove(this);
 			}
 		}
 	});
-	
+
 	var Player = makeClass({
 		super : Ship,
-		color : vec4.fromValues(1,0,0,1),
+		color : vec4.fromValues(1,0,0,.5),
 		maxHealth : 20,
-		shotSpeed : 20,
-		reloadTime : .2,
 		init : function() {
 			Player.super.apply(this, arguments);
 			this.targetPos = vec3.create();
 			this.aimPos = vec3.create();
 			this.aimPos[2] = worldBounds.min[2];
 			this.speed = 10;
+			this.weapon = new BasicShotWeapon({
+				owner : this,
+				shotSpeed : 20,
+			});
 		},
 		update : function(dt) {
 			//determine velocity
@@ -352,10 +811,11 @@ void main() {
 			Player.superProto.update.apply(this, arguments);
 
 			if (this.shooting) {
-				var dir = vec3.create();
-				vec3.sub(dir, this.aimPos, this.pos);
-				vec3.normalize(dir, dir);
-				this.shoot(dir[0], dir[1], dir[2]);
+				var dirX = this.aimPos[0] - this.pos[0];
+				var dirY = this.aimPos[1] - this.pos[1];
+				var dirZ = this.aimPos[2] - this.pos[2];
+				var dirLen = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ);
+				this.weapon.shoot(dirX/dirLen, dirY/dirLen, dirZ/dirLen);
 			}
 		},
 		takeDamage : function(damage, inflicter, attacker) {
@@ -376,12 +836,36 @@ void main() {
 	
 	/*var*/ game = new Game();
 	game.start();
-	
+
 	//update loop
 	var update = function() {
+		//
 		var dt = 1/30;
+
+		shotSystem.update(dt);
+
+		//update game objects
 		game.update(dt);
+		
 		game.draw();
+
+		shotSystem.draw();
+		
+		//test
+		//the renderr goes very fast.  20k quads at 60fps only because it was vsync'd
+		//the slowdown is from the game update
+		/*
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		initDrawFrame();
+		for (var i = 0; i < maxQuads; ++i) {
+			drawQuad(
+				[rand(-5,5), rand(-5,5), rand(-50,-5)], 
+				[Math.random(), Math.random(), Math.random(), Math.random()],
+				1);
+		}
+		finishDrawFrame();
+		*/
+
 		requestAnimFrame(update);
 	};
 	update();
@@ -390,7 +874,7 @@ void main() {
 	var movePlayer = function(xf, yf) {
 		if (game.player === undefined) return;
 		var aspectRatio = glutil.canvas.width / glutil.canvas.height;
-		var playerZPlane = glutil.view.pos[2] - game.player.pos[2];
+		var playerZPlane = -game.player.pos[2];
 		game.player.targetPos[0] = (xf * 2 - 1) * aspectRatio * playerZPlane;
 		game.player.targetPos[1] = (1 - yf * 2) * playerZPlane;
 		game.player.aimPos[0] = game.player.targetPos[0];
@@ -399,7 +883,7 @@ void main() {
 	var aimPlayer = function(xf, yf) {
 		if (game.player === undefined) return;
 		var aspectRatio = glutil.canvas.width / glutil.canvas.height;
-		var playerZPlane = glutil.view.pos[2] - game.player.pos[2];
+		var playerZPlane = -game.player.pos[2];
 		game.player.aimPos[0] = (xf * 2 - 1) * aspectRatio * playerZPlane;
 		game.player.aimPos[1] = (1 - yf * 2) * playerZPlane;
 		//exhaggerate
@@ -420,10 +904,10 @@ void main() {
 		handleInputEvent(e);
 	});
 	$(window).bind('mousedown', function(e) {
-		game.player.shooting = true;
+		if (game.player !== undefined) game.player.shooting = true;
 	});
 	$(window).bind('mouseup', function(e) {
-		game.player.shooting = false;
+		if (game.player !== undefined) game.player.shooting = false;
 	});
 	$(window).bind('touchmove', function(e) {
 		handleInputEvent(e.originalEvent.changedTouches[0]);
