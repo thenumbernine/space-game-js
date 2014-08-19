@@ -58,7 +58,7 @@ void main() {
 			thisTime = Date.now();
 			if (thisTime - lastTime > 1000) {
 				var fps = frames * 1000 / (thisTime - lastTime);
-//				console.log('fps', fps);
+				//console.log('fps', fps);
 				frames = 0;
 				lastTime = thisTime;	
 			}
@@ -82,6 +82,72 @@ void main() {
 		gl.bufferSubData(gl.ARRAY_BUFFER, 0, quadVertexArray);
 		gl.drawArrays(gl.TRIANGLES, 0, quadIndex * 6);
 	};
+
+	//http://lab.concord.org/experiments/webgl-gpgpu/webgl.html
+	var encodeShader = new glutil.ShaderProgram({
+		vertexPrecision : 'best',
+		vertexCode : mlstr(function(){/*
+attribute vec2 vertex;
+attribute vec2 texCoord;
+varying vec2 pos;
+void main() {
+	pos = texCoord;
+	gl_Position = vec4(vertex, 0., 1.);
+}
+*/}),
+		fragmentPrecision : 'best',
+		fragmentCode : mlstr(function(){/*
+varying vec2 pos;
+uniform sampler2D tex;
+
+float shift_right(float v, float amt) {
+	v = floor(v) + 0.5;
+	return floor(v / exp2(amt));
+}
+
+float shift_left(float v, float amt) {
+	return floor(v * exp2(amt) + 0.5);
+}
+
+float mask_last(float v, float bits) {
+	return mod(v, shift_left(1.0, bits));
+}
+
+float extract_bits(float num, float from, float to) {
+	from = floor(from + 0.5);
+	to = floor(to + 0.5);
+	return mask_last(shift_right(num, from), to - from);
+}
+
+vec4 encode_float(float val) {
+	if (val == 0.0)
+		return vec4(0, 0, 0, 0);
+	float sign = val > 0.0 ? 0.0 : 1.0;
+	val = abs(val);
+	float exponent = floor(log2(val));
+	float biased_exponent = exponent + 127.0;
+	float fraction = ((val / exp2(exponent)) - 1.0) * 8388608.0;
+	
+	float t = biased_exponent / 2.0;
+	float last_bit_of_biased_exponent = fract(t) * 2.0;
+	float remaining_bits_of_biased_exponent = floor(t);
+	
+	float byte4 = extract_bits(fraction, 0.0, 8.0) / 255.0;
+	float byte3 = extract_bits(fraction, 8.0, 16.0) / 255.0;
+	float byte2 = (last_bit_of_biased_exponent * 128.0 + extract_bits(fraction, 16.0, 23.0)) / 255.0;
+	float byte1 = (sign * 128.0 + remaining_bits_of_biased_exponent) / 255.0;
+	return vec4(byte4, byte3, byte2, byte1);
+}
+
+void main() {
+	vec4 data = texture2D(tex, pos);
+	gl_FragColor = encode_float(data[0]);
+}
+*/}),
+		uniforms : {
+			tex : 0
+		}
+	});
 
 	var ShotSystem = makeClass({
 		init : function() {
@@ -159,14 +225,14 @@ void main() {
 				height : this.texSize,
 				internalFormat : gl.RGBA,
 				format : gl.RGBA,
-				type : gl.UNSIGNED_BYTE,
+				type : gl.FLOAT,
 				minFilter : gl.NEAREST,
 				magFilter : gl.NEAREST,
 				wrap : {
 					s : gl.REPEAT,
 					t : gl.REPEAT
 				},
-				data : initialDataI8
+				data : initialDataF32
 			});
 			this.byte4ScratchTex = new glutil.Texture2D({
 				width : this.texSize,
@@ -362,9 +428,9 @@ void main() {
 	float b = texture2D(srcTex, (intPos * 2. + vec2(1., 0.) + .5) / texsize).a;
 	float c = texture2D(srcTex, (intPos * 2. + vec2(0., 1.) + .5) / texsize).a;
 	float d = texture2D(srcTex, (intPos * 2. + vec2(1., 1.) + .5) / texsize).a;
-	float e = max(a,b);
-	float f = max(c,d);
-	float g = max(e,f);
+	float e = a + b;
+	float f = c + d;
+	float g = e + f;
 	gl_FragColor = vec4(g, 0., 0., 0.);
 }
 */})
@@ -529,15 +595,12 @@ void main() {
 
 			var size = this.texSize;
 			while (size > 1) {
-				//console.log(getFloatTexData({srcTex:this.cflReduceTex})); fbo.bind();
-				//console.log('reducing...')
-				
 				size /= 2;
 				if (size !== Math.floor(size)) throw 'got a npo2 size '+this.nx;
 				gl.viewport(0, 0, size, size);
 			
 				//bind scratch texture to fbo
-				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.byte4ScratchTex.obj, 0);
+				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
 				this.fbo.check();
 			
 				//setup shader
@@ -556,8 +619,8 @@ void main() {
 
 				//swap current reduce texture and reduce fbo target tex
 				{
-					var tmp = this.byte4ScratchTex;
-					this.byte4ScratchTex = this.reduceTex;
+					var tmp = this.float4ScratchTex;
+					this.float4ScratchTex = this.reduceTex;
 					this.reduceTex = tmp;
 				}
 
@@ -567,22 +630,37 @@ void main() {
 				gl.bindTexture(gl.TEXTURE_2D, this.reduceTex.obj);
 			}
 			
-			gl.bindTexture(gl.TEXTURE_2D, null);
-			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.reduceTex.obj, 0);
-			var result = new Uint8Array(4);
-			gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, result);
-			if (result[0] > 0 && 
-				//for some reason we're getting a false positive on the very first frame
-				game.time > 0)
-			{
-				console.log(result[0], result[1], result[2], result[3]);
-				if (game.player !== undefined) {
-					game.player.takeDamage(Shot.prototype.damage, undefined, undefined);
-				}
+			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.byte4ScratchTex.obj, 0);
+			this.fbo.check();
+			gl.viewport(0, 0, this.texSize, this.texSize);
+			
+			gl.useProgram(encodeShader.obj);
+			gl.bindTexture(gl.TEXTURE_2D, this.reduceTex.obj);
 
-			}
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
+			gl.enableVertexAttribArray(encodeShader.attrs.vertex.loc);
+			gl.vertexAttribPointer(encodeShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
+			gl.enableVertexAttribArray(encodeShader.attrs.texCoord.loc);
+			gl.vertexAttribPointer(encodeShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+			var uint8Result = new Uint8Array(4);
+			gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, uint8Result);
 
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+			var float32Result = new Float32Array(uint8Result.buffer);
+			gl.viewport(0, 0, this.nx, this.nx);
+			var result = float32Result[0];
+
+			if (result > 0) {
+				if (game.player !== undefined) {
+					game.player.takeDamage(result, undefined, undefined);
+				}
+			}
+
+			gl.bindTexture(gl.TEXTURE_2D, null);
 			gl.bindBuffer(gl.ARRAY_BUFFER, null);
 			gl.viewport(0, 0, glutil.canvas.width, glutil.canvas.height);
 			
@@ -710,6 +788,7 @@ void main() {
 	var Player;
 	var Enemy;
 	var GroupEnemy;
+	var TurretEnemy;
 	var Star;
 
 	var Game = makeClass({
@@ -749,29 +828,44 @@ void main() {
 			//game logic: add extra enemies
 			if (this.time >= this.nextEnemyTime) {
 				this.nextEnemyTime = this.time + 10;
-				var theta = Math.random() * Math.PI * 2;
-				var vel = vec3.fromValues(Math.cos(theta), Math.sin(theta), 1);
-				var groupCenter = vec3.fromValues(
-					rand(worldBounds.min[0] + 2, worldBounds.max[0] - 2),
-					rand(worldBounds.min[1] + 2, worldBounds.max[1] - 2),
-					worldBounds.min[2] + 1);
-				var spread = 1.5;
-				var waveSize = Math.floor(rand(2,6));
-				var group = [];
-				for (var i = 0; i < waveSize; ++i) {
-					var groupAngle = i / waveSize * Math.PI * 2;
-					var enemy = new GroupEnemy({
-						group : group,
+			
+				if (true) {	//TurretEnemy
+					new TurretEnemy({
 						pos : vec3.fromValues(
-							groupCenter[0] + spread * Math.cos(groupAngle),
-							groupCenter[1] + spread * Math.sin(groupAngle),
-							groupCenter[2]),
-						vel : vel
+							rand(worldBounds.min[0] + 2, worldBounds.max[0] - 2),
+							worldBounds.min[1],
+							worldBounds.min[2] + 1),
+						vel : vec3.fromValues(0, 0, 5)
 					});
-					group.push(enemy);
 				}
-				for (var i = 0; i < group.length; ++i) {
-					group[i].groupInit();
+
+				if (false) {	//GroupEnemy
+				
+					var theta = Math.random() * Math.PI * 2;
+					var vel = vec3.fromValues(Math.cos(theta), Math.sin(theta), 1);
+					var groupCenter = vec3.fromValues(
+						rand(worldBounds.min[0] + 2, worldBounds.max[0] - 2),
+						rand(worldBounds.min[1] + 2, worldBounds.max[1] - 2),
+						worldBounds.min[2] + 1);
+					var spread = 1.5;
+					var waveSize = Math.floor(rand(2,6));
+					var group = [];
+					for (var i = 0; i < waveSize; ++i) {
+						var groupAngle = i / waveSize * Math.PI * 2;
+						var enemy = new GroupEnemy({
+							group : group,
+							pos : vec3.fromValues(
+								groupCenter[0] + spread * Math.cos(groupAngle),
+								groupCenter[1] + spread * Math.sin(groupAngle),
+								groupCenter[2]),
+							vel : vel
+						});
+						group.push(enemy);
+					}
+					for (var i = 0; i < group.length; ++i) {
+						group[i].groupInit();
+					}
+
 				}
 			}
 
@@ -791,7 +885,7 @@ void main() {
 	
 	/*var*/ worldBounds = {
 		min : vec3.fromValues(-10, -10, -50),
-		max : vec3.fromValues(10, 10, 5)
+		max : vec3.fromValues(10, 10, -4)
 	};
 
 	Star = makeClass({
@@ -1057,6 +1151,66 @@ void main() {
 		super : Ship
 	});
 
+	TurretEnemy = makeClass({
+		super : Enemy,
+		color : vec4.fromValues(1,0,0,1),
+		nextShotTime : 0,
+		update : function() {
+			TurretEnemy.superProto.update.apply(this, arguments);
+			
+			
+			//can shoot again
+			if (game.time > this.nextShotTime) {
+				this.nextShotTime = game.time + 3;
+
+				var speed = 10;
+
+				//fire off a few shots
+				var dx = 0;
+				var dy = 0;
+				var dz = 1;
+
+				if (game.player !== undefined) {
+					dx = game.player.pos[0] - this.pos[0];
+					dy = game.player.pos[1] - this.pos[1];
+					dz = game.player.pos[2] - this.pos[2];
+					var s = 1/Math.sqrt(dx * dx + dy * dy + dz * dz);
+					dx *= s;
+					dy *= s;
+					dz *= s;
+				}
+
+				//x axis
+				var ax = 1;
+				var ay = 0;
+				var az = 0;
+
+				//d cross x
+				var bx = 0;
+				var by = dz;
+				var bz = -dy;
+
+				var iMaxRadius = 5;
+				for (var iradius = 0; iradius < iMaxRadius; ++iradius) {
+					var iMaxTheta = iradius * iradius + 1;
+					var radius = iradius / iMaxRadius;
+					for (var itheta = 0; itheta < iMaxTheta; ++itheta) {
+						var theta = (itheta + .5) / iMaxTheta * Math.PI * 2;
+						var u = Math.cos(theta) * radius;
+						var v = Math.sin(theta) * radius;
+						shotSystem.add(
+							vec3.fromValues(
+								this.pos[0] + ax * u + bx * v,
+								this.pos[1] + ay * u + by * v,
+								this.pos[2] + az * u + bz * v),
+							vec3.fromValues(dx * speed, dy * speed, dz * speed),
+							vec3.create());
+					}
+				}
+			}
+		}
+	});
+
 	GroupEnemy = makeClass({
 		super : Enemy,
 		color : vec4.fromValues(1,0,1,1),
@@ -1122,12 +1276,13 @@ void main() {
 			var ax = 0;
 			var ay = 0;
 			var az = 0;
-			
+			/*homing
 			if (game.player !== undefined) {
 				var t = (game.player.pos[2] - this.pos[2]) / vz;
 				ax = 2 * ((game.player.pos[0] - this.pos[0]) / t - vx) / t;
 				ay = 2 * ((game.player.pos[1] - this.pos[1]) / t - vy) / t;
 			}
+			*/
 			this.weapon.shoot(vx, vy, vz, ax, ay, 0);
 			
 			if (this.group !== undefined && this.group.length > 1) {
@@ -1204,7 +1359,7 @@ void main() {
 		},
 		takeDamage : function(damage, inflicter, attacker) {
 			Player.superProto.takeDamage.apply(this, arguments);
-			//console.log('hit and at',this.health);
+			console.log('hit and at',this.health);
 		},
 		die : function(inflicter, attacker) {
 			//add lots of explosion bits 
