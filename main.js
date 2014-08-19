@@ -58,7 +58,7 @@ void main() {
 			thisTime = Date.now();
 			if (thisTime - lastTime > 1000) {
 				var fps = frames * 1000 / (thisTime - lastTime);
-				console.log('fps', fps);
+//				console.log('fps', fps);
 				frames = 0;
 				lastTime = thisTime;	
 			}
@@ -83,36 +83,91 @@ void main() {
 		gl.drawArrays(gl.TRIANGLES, 0, quadIndex * 6);
 	};
 
-	var FloatTexture2D = makeClass({
-		super : glutil.Texture2D,
-		init : function(width, height) {
-			var args = {};
-			args.width = width;
-			args.height = height;
-			args.internalFormat = gl.RGB;
-			args.format = gl.RGB;
-			args.type = gl.FLOAT;
-			args.minFilter = gl.NEAREST;
-			args.magFilter = gl.NEAREST;
-			args.wrap = {
-				s : gl.REPEAT,
-				t : gl.REPEAT
-			};
-			args.data = new Float32Array(width * height * 4);
-			for (var i = 0; i < width * height * 4; ++i) {
-				args.data[i] = Infinity;
-			}
-			FloatTexture2D.super.call(this, args);
-		}
-	});
-
-
 	var ShotSystem = makeClass({
 		init : function() {
 			this.texSize = 256;
-			this.posTex = new FloatTexture2D(this.texSize, this.texSize);
-			this.nextPosTex = new FloatTexture2D(this.texSize, this.texSize);
-			this.velTex= new FloatTexture2D(this.texSize, this.texSize);
+			
+			var initialDataF32 = new Float32Array(this.texSize * this.texSize * 4);
+			for (var i = 0; i < this.texSize * this.texSize * 4; ++i) {
+				initialDataF32[i] = Infinity;
+			}
+
+			var initialDataI8 = new Uint8Array(this.texSize * this.texSize * 4);
+			for (var i = 0; i < this.texSize * this.texSize * 4; ++i) {
+				initialDataI8[i] = 0;
+			}
+			
+			this.posTex = new glutil.Texture2D({
+				width : this.texSize,
+				height : this.texSize,
+				internalFormat : gl.RGBA,
+				format : gl.RGBA,
+				type : gl.FLOAT,
+				minFilter : gl.NEAREST,
+				magFilter : gl.NEAREST,
+				wrap : {
+					s : gl.REPEAT,
+					t : gl.REPEAT
+				},
+				data : initialDataF32
+			});
+			this.nextPosTex = new glutil.Texture2D({
+				width : this.texSize,
+				height : this.texSize,
+				internalFormat : gl.RGBA,
+				format : gl.RGBA,
+				type : gl.FLOAT,
+				minFilter : gl.NEAREST,
+				magFilter : gl.NEAREST,
+				wrap : {
+					s : gl.REPEAT,
+					t : gl.REPEAT
+				},
+				data : initialDataF32
+			});
+			this.velTex = new glutil.Texture2D({
+				width : this.texSize,
+				height : this.texSize,
+				internalFormat : gl.RGBA,
+				format : gl.RGBA,
+				type : gl.FLOAT,
+				minFilter : gl.NEAREST,
+				magFilter : gl.NEAREST,
+				wrap : {
+					s : gl.REPEAT,
+					t : gl.REPEAT
+				},
+				data : initialDataF32
+			});
+			this.reduceTex = new glutil.Texture2D({
+				width : this.texSize,
+				height : this.texSize,
+				internalFormat : gl.RGBA,
+				format : gl.RGBA,
+				type : gl.UNSIGNED_BYTE,
+				minFilter : gl.NEAREST,
+				magFilter : gl.NEAREST,
+				wrap : {
+					s : gl.REPEAT,
+					t : gl.REPEAT
+				},
+				data : initialDataI8
+			});
+			this.reduceTex2 = new glutil.Texture2D({
+				width : this.texSize,
+				height : this.texSize,
+				internalFormat : gl.RGBA,
+				format : gl.RGBA,
+				type : gl.UNSIGNED_BYTE,
+				minFilter : gl.NEAREST,
+				magFilter : gl.NEAREST,
+				wrap : {
+					s : gl.REPEAT,
+					t : gl.REPEAT
+				},
+				data : initialDataI8
+			});
+			
 			this.fbo = new glutil.Framebuffer({
 				width : this.texSize,
 				height : this.texSize
@@ -165,13 +220,34 @@ varying vec2 pos;
 uniform sampler2D posTex;
 uniform sampler2D velTex;
 uniform float dt;
+uniform vec3 playerPos;
 void main() {
-	vec3 shotPos = texture2D(posTex, pos).xyz;
+	vec3 oldPos = texture2D(posTex, pos).xyz;
 	vec3 shotVel = texture2D(velTex, pos).xyz;
-	shotPos += shotVel * dt;
-	shotPos -= shotVel * dt;
-	shotPos.z += 4. * dt;
-	gl_FragColor = vec4(shotPos, 1.);
+	
+	//hmm, shotVel isn't working ... so i'll overwrite it here
+	shotVel = vec3(0., 0., 4.);
+
+	vec3 delta = shotVel * dt;
+	vec3 newPos = oldPos + delta;
+	
+	float didCollide = 0.;
+	float frac = (playerPos.z - oldPos.z) / delta.z;
+	if (frac >= 0. && frac <= 1.) {
+		vec2 intersect = oldPos.xy + frac * delta.xy;
+		vec2 intersectOffset = intersect - playerPos.xy;
+
+		const float playerSize = 1.;
+		const float shotSize = .3;
+		const float intersectCheckSize = .5 * (playerSize + shotSize);
+		if (abs(intersectOffset.x) < intersectCheckSize &&
+			abs(intersectOffset.y) < intersectCheckSize)
+		{
+			didCollide = 1.;
+		}
+	}
+
+	gl_FragColor = vec4(newPos, didCollide);
 }
 */}),
 				uniforms : {
@@ -182,7 +258,71 @@ void main() {
 			gl.useProgram(this.updateShader.obj);
 			gl.uniform1i(this.updateShader.uniforms.posTex.obj, 0);
 			gl.uniform1i(this.updateShader.uniforms.velTex.obj, 1);
-			
+	
+			this.collisionReduceFirstShader = new glutil.ShaderProgram({
+				vertexPrecision : 'best',
+				vertexCode : mlstr(function(){/*
+attribute vec2 vertex;
+attribute vec2 texCoord;
+varying vec2 pos;
+void main() {
+	pos = texCoord;
+	gl_Position = vec4(vertex, 0., 1.);
+}
+*/}),
+				fragmentPrecision : 'best',
+				fragmentCode : mlstr(function(){/*
+uniform sampler2D srcTex;
+uniform vec2 texsize;
+uniform vec2 viewsize;
+varying vec2 pos;
+void main() {
+	vec2 intPos = pos * viewsize - .5;
+	
+	float a = texture2D(srcTex, (intPos * 2. + .5) / texsize).a;
+	float b = texture2D(srcTex, (intPos * 2. + vec2(1., 0.) + .5) / texsize).a;
+	float c = texture2D(srcTex, (intPos * 2. + vec2(0., 1.) + .5) / texsize).a;
+	float d = texture2D(srcTex, (intPos * 2. + vec2(1., 1.) + .5) / texsize).a;
+	float e = max(a,b);
+	float f = max(c,d);
+	float g = max(e,f);
+	gl_FragColor = vec4(g, 0., 0., 0.);
+}
+*/})
+			});
+
+			this.collisionReduceShader = new glutil.ShaderProgram({
+				vertexPrecision : 'best',
+				vertexCode : mlstr(function(){/*
+attribute vec2 vertex;
+attribute vec2 texCoord;
+varying vec2 pos;
+void main() {
+	pos = texCoord;
+	gl_Position = vec4(vertex, 0., 1.);
+}
+*/}),
+				fragmentPrecision : 'best',
+				fragmentCode : mlstr(function(){/*
+uniform sampler2D srcTex;
+uniform vec2 texsize;
+uniform vec2 viewsize;
+varying vec2 pos;
+void main() {
+	vec2 intPos = pos * viewsize - .5;
+	
+	float a = texture2D(srcTex, (intPos * 2. + .5) / texsize).x;
+	float b = texture2D(srcTex, (intPos * 2. + vec2(1., 0.) + .5) / texsize).x;
+	float c = texture2D(srcTex, (intPos * 2. + vec2(0., 1.) + .5) / texsize).x;
+	float d = texture2D(srcTex, (intPos * 2. + vec2(1., 1.) + .5) / texsize).x;
+	float e = max(a,b);
+	float f = max(c,d);
+	float g = max(e,f);
+	gl_FragColor = vec4(g, 0., 0., 0.);
+}
+*/})
+			});
+
 			this.drawShader = new glutil.ShaderProgram({
 				vertexPrecision : 'best',
 				vertexCode : mlstr(function(){/*
@@ -210,6 +350,19 @@ void main() {
 			this.addCoordY = 0;
 		},
 
+		reset : function() {
+			var initialDataF32 = new Float32Array(this.texSize * this.texSize * 4);
+			for (var i = 0; i < this.texSize * this.texSize * 4; ++i) {
+				initialDataF32[i] = Infinity;
+			}
+		
+			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.texSize, this.texSize, gl.RGBA, gl.FLOAT, initialDataF32);
+			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.texSize, this.texSize, gl.RGBA, gl.FLOAT, initialDataF32);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+		},
+		
 		update : function(dt) {
 			//update shots
 			gl.disable(gl.DEPTH_TEST);
@@ -228,6 +381,9 @@ void main() {
 
 			gl.useProgram(this.updateShader.obj);
 			gl.uniform1f(this.updateShader.uniforms.dt.loc, dt);
+			if (game.player !== undefined) {
+				gl.uniform3fv(this.updateShader.uniforms.playerPos.loc, game.player.pos);
+			}
 		
 			this.fbo.check();
 
@@ -238,7 +394,57 @@ void main() {
 			gl.enableVertexAttribArray(this.updateShader.attrs.texCoord.loc);
 			gl.vertexAttribPointer(this.updateShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
 			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+		
+			//now reduce to find if a collision occurred
+			//TODO how to do this for all ships, and not just the player?
+			// -- how about a low limit on the # of total ships, then just static unrolled for-loop in the shader?
+
+			//first shader reads from alpha channel
+			var shader = this.collisionReduceFirstShader;
+
+			var size = this.texSize;
+			while (size > 1) {
+				//console.log(getFloatTexData({srcTex:this.cflReduceTex})); fbo.bind();
+				//console.log('reducing...')
+				
+				size /= 2;
+				if (size !== Math.floor(size)) throw 'got a npo2 size '+this.nx;
+				gl.viewport(0, 0, size, size);
+				
+				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.reduceTex2.obj, 0);
+				this.fbo.check();
+				gl.clear(gl.COLOR_BUFFER_BIT);
+				this.quadObj.draw({
+					shader : shader,
+					uniforms : {
+						texsize : [this.texSize, this.texSize], 
+						viewsize : [size, size]
+					}
+				});
+
+				{
+					var tmp = this.reduceTex2;
+					this.reduceTex2 = this.reduceTex;
+					this.reduceTex = tmp;
+				}
+
+				shader = this.collisionReduceShader;
+
+				gl.bindTexture(gl.TEXTURE_2D, this.reduceTex.obj);
+			}
 			
+			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.reduceTex.obj, 0);
+			var result = new Uint8Array(4);
+			gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, result);
+			if (result[0] > 0 && 
+				//for some reason we're getting a false positive on the very first frame
+				game.time > 0)
+			{
+				if (game.player !== undefined) {
+					game.player.takeDamage(Shot.prototype.damage, undefined, undefined);
+				}
+			}
+
 			gl.bindBuffer(gl.ARRAY_BUFFER, null);
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 			gl.activeTexture(gl.TEXTURE1);
@@ -264,9 +470,9 @@ void main() {
 			//writing a single pixel
 			// which is faster?  fbo with a 1-pixel viewport, or texsubimage of 1 pixel?
 			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
-			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGB, gl.FLOAT, newShotPos);
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotPos));
 			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
-			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGB, gl.FLOAT, newShotVel);
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotVel));
 			gl.bindTexture(gl.TEXTURE_2D, null);
 
 			//increment pointer in the framebuffer
@@ -487,6 +693,7 @@ void main() {
 			if (args !== undefined) {
 				if (args.pos !== undefined) vec3.copy(this.pos, args.pos);
 				if (args.vel !== undefined) vec3.copy(this.vel, args.vel);
+				if (args.color !== undefined) this.color = vec4.clone(args.color);
 			}
 			game.objs.push(this);
 		},
@@ -512,18 +719,18 @@ void main() {
 					if (o == this) continue;
 					
 					//for now assume we're quads ...
-					var f = (o.pos[2] - startZ) / deltaZ;
-					if (f < 0 || f > 1) continue;
+					var frac = (o.pos[2] - startZ) / deltaZ;
+					if (frac < 0 || frac > 1) continue;
 
-					var x = startX + f * deltaX;
-					var y = startY + f * deltaY;
+					var x = startX + frac * deltaX;
+					var y = startY + frac * deltaY;
 					var dx = x - o.pos[0];
 					var dy = y - o.pos[1];
 					if (Math.abs(dx) < (this.scale + o.scale) * .5 &&
 						Math.abs(dy) < (this.scale + o.scale) * .5)
 					{
 						mightTouchObj[mightTouchLength] = o;
-						mightTouchFrac[mightTouchLength] = f;
+						mightTouchFrac[mightTouchLength] = frac;
 						++mightTouchLength;
 					}
 				}
@@ -823,12 +1030,24 @@ void main() {
 			console.log('hit and at',this.health);
 		},
 		die : function(inflicter, attacker) {
+			//add lots of explosion bits 
+			var r = Math.random();
+			var g = Math.random() * r;
+			var b = Math.random() * g;
+			for (var i = 0; i < 20; ++i) {
+				new Shrapnel({
+					pos : this.pos,
+					color : vec4.fromValues(r,g,b,1)
+				});
+			}
+			
 			Player.superProto.die.apply(this, arguments);
 			game.player = undefined;
 			//restart the game
 			setTimeout(function() {
 				//I was just creating a new game, but Chrome leaked badly and the framerate of the subsequent games got kicked down a big percent each time. 
 				game.reset();
+				shotSystem.reset();
 				game.start();
 			}, 5000);
 		}
@@ -836,6 +1055,7 @@ void main() {
 	
 	/*var*/ game = new Game();
 	game.start();
+	shotSystem.reset();
 
 	//update loop
 	var update = function() {
@@ -848,7 +1068,7 @@ void main() {
 		game.update(dt);
 		
 		game.draw();
-
+		
 		shotSystem.draw();
 		
 		//test
