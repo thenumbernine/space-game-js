@@ -336,9 +336,9 @@ uniform float dt;
 uniform vec3 playerPos;
 void main() {
 	vec3 oldPos = texture2D(posTex, pos).xyz;
-	vec3 shotVel = texture2D(velTex, pos).xyz;
+	vec4 shotVel = texture2D(velTex, pos);
 
-	vec3 delta = shotVel * dt;
+	vec3 delta = shotVel.xyz * dt;
 	vec3 newPos = oldPos + delta;
 	
 	float didCollide = 0.;
@@ -353,7 +353,7 @@ void main() {
 		if (abs(intersectOffset.x) < intersectCheckSize &&
 			abs(intersectOffset.y) < intersectCheckSize)
 		{
-			didCollide = 1.;
+			didCollide = shotVel.w;
 		}
 	}
 
@@ -390,11 +390,14 @@ uniform sampler2D velTex;
 uniform sampler2D accelTex;
 uniform float dt;
 void main() {
-	vec3 vel = texture2D(velTex, pos).xyz;
+	//preserve w, the shot's damage
+	//store it here because updatePos replaces the w of the pos for the collision flag
+	//...though I could separate that in favor of my generic integration kernel 
+	vec4 vel = texture2D(velTex, pos);
 	vec3 accel = texture2D(accelTex, pos).xyz;
 
-	vel += accel * dt;
-	gl_FragColor = vec4(vel, 1.);
+	vel.xyz += accel * dt;
+	gl_FragColor = vel;
 }
 */}),
 				uniforms : {
@@ -671,13 +674,13 @@ void main() {
 			gl.useProgram(defaultShader.obj);
 		},
 
-		add : function(newShotPos, newShotVel, newShotAccel) {
+		add : function(damage, newShotPos, newShotVel, newShotAccel) {
 			//writing a single pixel
 			// which is faster?  fbo with a 1-pixel viewport, or texsubimage of 1 pixel?
 			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
-			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotPos));
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues(newShotPos[0], newShotPos[1], newShotPos[2], 0));
 			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
-			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotVel));
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues(newShotVel[0], newShotVel[1], newShotVel[2], damage));
 			gl.bindTexture(gl.TEXTURE_2D, this.accelTex.obj);
 			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotAccel));
 			gl.bindTexture(gl.TEXTURE_2D, null);
@@ -1112,6 +1115,7 @@ void main() {
 				});
 			} else {
 				shotSystem.add(
+					Shot.prototype.damage,
 					this.owner.pos,
 					vec3.fromValues(vx, vy, vz),
 					vec3.fromValues(ax, ay, az));
@@ -1199,6 +1203,7 @@ void main() {
 						var u = Math.cos(theta) * radius;
 						var v = Math.sin(theta) * radius;
 						shotSystem.add(
+							Shot.prototype.damage,
 							vec3.fromValues(
 								this.pos[0] + ax * u + bx * v,
 								this.pos[1] + ay * u + by * v,
