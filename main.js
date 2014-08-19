@@ -224,9 +224,6 @@ uniform vec3 playerPos;
 void main() {
 	vec3 oldPos = texture2D(posTex, pos).xyz;
 	vec3 shotVel = texture2D(velTex, pos).xyz;
-	
-	//hmm, shotVel isn't working ... so i'll overwrite it here
-	shotVel = vec3(0., 0., 4.);
 
 	vec3 delta = shotVel * dt;
 	vec3 newPos = oldPos + delta;
@@ -251,13 +248,12 @@ void main() {
 }
 */}),
 				uniforms : {
-					dt : 'float'
+					dt : 0,
+					posTex : 0,
+					velTex : 1
 				},
-				texs : ['posTex', 'velTex']
 			});
-			gl.useProgram(this.updateShader.obj);
-			gl.uniform1i(this.updateShader.uniforms.posTex.obj, 0);
-			gl.uniform1i(this.updateShader.uniforms.velTex.obj, 1);
+			gl.useProgram(null);
 	
 			this.collisionReduceFirstShader = new glutil.ShaderProgram({
 				vertexPrecision : 'best',
@@ -394,7 +390,12 @@ void main() {
 			gl.enableVertexAttribArray(this.updateShader.attrs.texCoord.loc);
 			gl.vertexAttribPointer(this.updateShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
 			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-		
+	
+
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.activeTexture(gl.TEXTURE0);
+			
 			//now reduce to find if a collision occurred
 			//TODO how to do this for all ships, and not just the player?
 			// -- how about a low limit on the # of total ships, then just static unrolled for-loop in the shader?
@@ -445,12 +446,9 @@ void main() {
 				}
 			}
 
+			gl.bindTexture(gl.TEXTURE_2D, null);
 			gl.bindBuffer(gl.ARRAY_BUFFER, null);
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-			gl.activeTexture(gl.TEXTURE1);
-			gl.bindTexture(gl.TEXTURE_2D, null);
-			gl.activeTexture(gl.TEXTURE0);
-			gl.bindTexture(gl.TEXTURE_2D, null);
 			gl.viewport(0, 0, glutil.canvas.width, glutil.canvas.height);
 			
 			gl.enable(gl.DEPTH_TEST);
@@ -472,7 +470,7 @@ void main() {
 			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
 			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotPos));
 			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
-			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues.apply(vec4, newShotVel));
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, this.addCoordX, this.addCoordY, 1, 1, gl.RGBA, gl.FLOAT, vec4.fromValues(0, 0, 4, 0));//.apply(vec4, newShotVel));
 			gl.bindTexture(gl.TEXTURE_2D, null);
 
 			//increment pointer in the framebuffer
@@ -858,7 +856,7 @@ void main() {
 	});
 
 	var BasicShotWeapon = makeClass({
-		reloadTime : .2,
+		reloadTime : .1,
 		init : function(args) {
 			this.nextShotTime = 0;
 			if (args !== undefined) {
