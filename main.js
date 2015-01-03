@@ -347,7 +347,7 @@ void main() {
 		vec2 intersect = oldPos.xy + frac * delta.xy;
 		vec2 intersectOffset = intersect - playerPos.xy;
 
-		const float playerSize = 1.;
+		const float playerSize = .5;
 		const float shotSize = .1;
 		const float intersectCheckSize = .5 * (playerSize + shotSize);
 		if (abs(intersectOffset.x) < intersectCheckSize &&
@@ -830,7 +830,7 @@ void main() {
 			
 			//game logic: add extra enemies
 			if (this.time >= this.nextEnemyTime) {
-				this.nextEnemyTime = this.time + 10;
+				this.nextEnemyTime = this.time + 3;
 			
 				if (true) {	//TurretEnemy
 					new TurretEnemy({
@@ -842,7 +842,7 @@ void main() {
 					});
 				}
 
-				if (false) {	//GroupEnemy
+				if (true) {	//GroupEnemy
 				
 					var theta = Math.random() * Math.PI * 2;
 					var vel = vec3.fromValues(Math.cos(theta), Math.sin(theta), 1);
@@ -1159,15 +1159,18 @@ void main() {
 		super : Enemy,
 		color : vec4.fromValues(1,0,0,1),
 		nextShotTime : 0,
+		shootState : 0,
 		update : function() {
 			TurretEnemy.superProto.update.apply(this, arguments);
-			
 			
 			//can shoot again
 			if (game.time > this.nextShotTime) {
 				this.nextShotTime = game.time + 3;
+				this.shootState = 1;
+			}
 
-				var speed = 10;
+			if (this.shootState) {
+				var speed = 5;
 
 				//fire off a few shots
 				var dx = 0;
@@ -1184,24 +1187,43 @@ void main() {
 					dz *= s;
 				}
 
-				//x axis
-				var ax = 1;
-				var ay = 0;
-				var az = 0;
-
 				//d cross x
 				var bx = 0;
 				var by = dz;
 				var bz = -dy;
+				var l = 1/Math.sqrt(dy * dy + dz * dz);
+				by *= l;
+				bz *= l;
+
+				//(d cross x) cross d
+				var ax = by * dz - bz * dy;
+				var ay = bz * dx - bx * dz;
+				var az = bx * dy - by * dx;
+				var l = 1/Math.sqrt(ax * ax + ay * ay + az * az);
+				ax *= l;
+				ay *= l;
+				az *= l;
 
 				var iMaxRadius = 5;
-				for (var iradius = 0; iradius < iMaxRadius; ++iradius) {
-					var iMaxTheta = iradius * iradius + 1;
+				//for (var iradius = 0; iradius < iMaxRadius; ++iradius) 
+				{
+					var iradius = this.shootState - 1;
+					var iMaxTheta = 2 * iradius * iradius + 1;
 					var radius = iradius / iMaxRadius;
+					
 					for (var itheta = 0; itheta < iMaxTheta; ++itheta) {
 						var theta = (itheta + .5) / iMaxTheta * Math.PI * 2;
 						var u = Math.cos(theta) * radius;
 						var v = Math.sin(theta) * radius;
+						
+						//TODO calc so that all shots meet at player at the same time despite 1/30 frame delay between them
+						var accelPerp = 0;//.25 * radius;
+						var accelTang = 0;//.25 * radius;
+						var accel = vec3.fromValues(
+							dx * accelPerp + accelTang * (ax * u + bx * v),
+							dy * accelPerp + accelTang * (ay * u + by * v),
+							dz * accelPerp + accelTang * (az * u + bz * v));
+						
 						shotSystem.add(
 							Shot.prototype.damage,
 							vec3.fromValues(
@@ -1209,9 +1231,11 @@ void main() {
 								this.pos[1] + ay * u + by * v,
 								this.pos[2] + az * u + bz * v),
 							vec3.fromValues(dx * speed, dy * speed, dz * speed),
-							vec3.create());
+							accel);
 					}
 				}
+				this.shootState = this.shootState + 1;
+				if (this.shootState == iMaxRadius) this.shootState = 0;	//stop condition
 			}
 		}
 	});
@@ -1444,7 +1468,7 @@ void main() {
 		game.player.aimPos[0] = (xf * 2 - 1) * aspectRatio * targetScale;
 		game.player.aimPos[1] = (1 - yf * 2) * targetScale;
 		//exhaggerate
-		var exhaggeration = 2;
+		var exhaggeration = 5;
 		game.player.aimPos[0] += (game.player.aimPos[0] - game.player.targetPos[0]) * exhaggeration + game.player.targetPos[0];
 		game.player.aimPos[1] += (game.player.aimPos[1] - game.player.targetPos[1]) * exhaggeration + game.player.targetPos[1];
 	};
