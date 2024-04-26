@@ -69,24 +69,33 @@ const initDrawFrame = () => {
 
 	quadIndex = 0;
 	glutil.scene.setupMatrices();
+	gl.useProgram(defaultShader.obj);
 };
 
 const finishDrawFrame = () => {
-	gl.useProgram(defaultShader.obj);
-	gl.uniformMatrix4fv(defaultShader.uniforms.projMat.loc, false, glutil.scene.projMat);
+	const shader = defaultShader;
+	const vertexAttrLoc = shader.attrs.vertex.loc;
+	const colorAttrLoc = shader.attrs.color.loc;
+
+	gl.useProgram(shader.obj);
+	gl.uniformMatrix4fv(shader.uniforms.projMat.loc, false, glutil.scene.projMat);
 
 	//re-bind the vertex object
 	gl.bindBuffer(gl.ARRAY_BUFFER, quadVertexBuffer);
-	gl.enableVertexAttribArray(defaultShader.attrs.vertex.loc);
-	gl.enableVertexAttribArray(defaultShader.attrs.color.loc);
-	gl.vertexAttribPointer(defaultShader.attrs.vertex.loc, 3, gl.FLOAT, false, 7 * 4, 0);
-	gl.vertexAttribPointer(defaultShader.attrs.color.loc, 4, gl.FLOAT, false, 7 * 4, 3 * 4);
+
+	gl.enableVertexAttribArray(vertexAttrLoc);
+	gl.vertexAttribPointer(vertexAttrLoc, 3, gl.FLOAT, false, 7 * 4, 0);
+
+	gl.enableVertexAttribArray(colorAttrLoc);
+	gl.vertexAttribPointer(colorAttrLoc, 4, gl.FLOAT, false, 7 * 4, 3 * 4);
 
 	gl.bufferSubData(gl.ARRAY_BUFFER, 0, quadVertexArray);
 	gl.drawArrays(gl.TRIANGLES, 0, quadIndex * 6);
-	
-	gl.disableVertexAttribArray(defaultShader.attrs.vertex.loc);
-	gl.disableVertexAttribArray(defaultShader.attrs.color.loc);
+
+	gl.disableVertexAttribArray(vertexAttrLoc);
+	gl.disableVertexAttribArray(colorAttrLoc);
+
+	gl.useProgram(null);
 };
 
 //http://lab.concord.org/experiments/webgl-gpgpu/webgl.html
@@ -257,8 +266,6 @@ class ShotSystem {
 			width : this.texSize,
 			height : this.texSize
 		});
-		this.fbo.bind();
-		this.fbo.unbind();
 
 		const shotTexSize = 64;
 		const shotTexData = new Uint8Array(shotTexSize * shotTexSize * 4);
@@ -497,7 +504,6 @@ void main() {
 		gl.useProgram(this.drawShader.obj);
 		gl.uniform1i(this.drawShader.uniforms.posTex.loc, 0);
 		gl.uniform1i(this.drawShader.uniforms.shotTex.loc, 1);
-
 		gl.useProgram(null);
 
 		this.addCoordX = 0;
@@ -527,43 +533,54 @@ void main() {
 
 		//update shot position
 
-		this.fbo.bind();
-		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
-		//this.fbo.check();
+		{
+			const shader = this.updatePosShader;
+			const vertexAttrLoc = shader.attrs.vertex.loc;
+			const texCoordAttrLoc = shader.attrs.texCoord.loc;
 
-		gl.activeTexture(gl.TEXTURE1);
-		gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
-		gl.activeTexture(gl.TEXTURE0);
-		gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+			this.fbo.bind();
+			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
+			this.fbo.check();
 
-		gl.useProgram(this.updatePosShader.obj);
-		gl.uniform1f(this.updatePosShader.uniforms.dt.loc, dt);
-		if (game.player !== undefined) {
-			gl.uniform3fv(this.updatePosShader.uniforms.playerPos.loc, game.player.pos);
+			gl.useProgram(shader.obj);
+
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, this.posTex.obj);
+
+			gl.uniform1f(shader.uniforms.dt.loc, dt);
+			if (game.player !== undefined) {
+				gl.uniform3fv(shader.uniforms.playerPos.loc, game.player.pos);
+			}
+
+			gl.enableVertexAttribArray(vertexAttrLoc);
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.buffer.obj);
+			gl.vertexAttribPointer(vertexAttrLoc, 2, gl.FLOAT, false, 0, 0);
+
+			gl.enableVertexAttribArray(texCoordAttrLoc);
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.buffer.obj);
+			gl.vertexAttribPointer(texCoordAttrLoc, 2, gl.FLOAT, false, 0, 0);
+
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+			gl.disableVertexAttribArray(vertexAttrLoc);
+			gl.disableVertexAttribArray(texCoordAttrLoc);
+
+			this.fbo.unbind();
 		}
 
-		gl.enableVertexAttribArray(this.updatePosShader.attrs.vertex.loc);
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
-		gl.vertexAttribPointer(this.updatePosShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
-		
-		gl.enableVertexAttribArray(this.updatePosShader.attrs.texCoord.loc);
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
-		gl.vertexAttribPointer(this.updatePosShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
-		
-		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-		
-		gl.disableVertexAttribArray(this.updatePosShader.attrs.vertex.loc);
-		gl.disableVertexAttribArray(this.updatePosShader.attrs.texCoord.loc);
-
-
-		[this.posTex, this.float4ScratchTex] = [this.float4ScratchTex, this.posTex];
-		this.fbo.unbind();
+		{
+			let tmp = this.posTex;
+			this.posTex = this.float4ScratchTex;
+			this.float4ScratchTex = tmp;
+		}
 
 		//update shot velocity
 
 		this.fbo.bind();
 		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
-		//this.fbo.check();
+		this.fbo.check();
 
 		gl.activeTexture(gl.TEXTURE1);
 		gl.bindTexture(gl.TEXTURE_2D, this.accelTex.obj);
@@ -575,20 +592,24 @@ void main() {
 
 
 		gl.enableVertexAttribArray(this.updateVelShader.attrs.vertex.loc);
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.buffer.obj);
 		gl.vertexAttribPointer(this.updateVelShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
-		
+
 		gl.enableVertexAttribArray(this.updateVelShader.attrs.texCoord.loc);
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.buffer.obj);
 		gl.vertexAttribPointer(this.updateVelShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
-		
+
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-		
+
 		gl.disableVertexAttribArray(this.updateVelShader.attrs.vertex.loc);
 		gl.disableVertexAttribArray(this.updateVelShader.attrs.texCoord.loc);
 
+		{
+			let tmp = this.velTex;
+			this.velTex = this.float4ScratchTex;
+			this.float4ScratchTex = tmp;
+		}
 
-		[this.velTex, this.float4ScratchTex] = [this.float4ScratchTex, this.velTex];
 		this.fbo.unbind();
 
 		//done with texunit1
@@ -615,7 +636,7 @@ void main() {
 			//bind scratch texture to fbo
 			this.fbo.bind();
 			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
-			//this.fbo.check();
+			this.fbo.check();
 
 			//setup shader
 			gl.useProgram(shader.obj);
@@ -624,21 +645,26 @@ void main() {
 
 			//draw screen quad
 			gl.enableVertexAttribArray(shader.attrs.vertex.loc);
-			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.buffer.obj);
 			gl.vertexAttribPointer(shader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
-			
+
 			gl.enableVertexAttribArray(shader.attrs.texCoord.loc);
-			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.buffer.obj);
 			gl.vertexAttribPointer(shader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
-			
+
 			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-			
+
 			gl.disableVertexAttribArray(shader.attrs.vertex.loc);
 			gl.disableVertexAttribArray(shader.attrs.texCoord.loc);
 
 
 			//swap current reduce texture and reduce fbo target tex
-			[this.float4ScratchTex, this.reduceTex] = [this.reduceTex, this.float4ScratchTex];
+			{
+				let tmp = this.float4ScratchTex;
+				this.float4ScratchTex = this.reduceTex;
+				this.reduceTex = tmp;
+			}
+
 			this.fbo.unbind();
 
 			shader = this.collisionReduceShader;
@@ -649,23 +675,23 @@ void main() {
 
 		this.fbo.bind();
 		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.byte4ScratchTex.obj, 0);
-		//this.fbo.check();
+		this.fbo.check();
 		gl.viewport(0, 0, this.texSize, this.texSize);
 
 		gl.useProgram(encodeShader.obj);
 		gl.bindTexture(gl.TEXTURE_2D, this.reduceTex.obj);
 
-		
+
 		gl.enableVertexAttribArray(encodeShader.attrs.vertex.loc);
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.obj);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.vertex.buffer.obj);
 		gl.vertexAttribPointer(encodeShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
-		
+
 		gl.enableVertexAttribArray(encodeShader.attrs.texCoord.loc);
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.obj);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadObj.attrs.texCoord.buffer.obj);
 		gl.vertexAttribPointer(encodeShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
-		
+
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-		
+
 		gl.disableVertexAttribArray(encodeShader.attrs.vertex.loc);
 		gl.disableVertexAttribArray(encodeShader.attrs.texCoord.loc);
 
@@ -730,13 +756,13 @@ void main() {
 
 		gl.uniformMatrix4fv(this.drawShader.uniforms.projMat.loc, false, glutil.scene.projMat);
 		gl.uniform1f(this.drawShader.uniforms.screenWidth.loc, glutil.canvas.width);
-		
+
 		gl.enableVertexAttribArray(this.drawShader.attrs.vertex.loc);
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
 		gl.vertexAttribPointer(this.drawShader.attrs.vertex.loc, 2, gl.FLOAT, false, 0, 0);
-		
+
 		gl.drawArrays(gl.POINTS, 0, this.texSize * this.texSize);
-		
+
 		gl.disableVertexAttribArray(this.drawShader.attrs.vertex.loc);
 
 		gl.bindTexture(gl.TEXTURE_2D, null);
@@ -1009,8 +1035,13 @@ class GameObject {
 					swapped = false;
 					for (let i = 1; i < mightTouchLength; ++i) {
 						if (mightTouchFrac[i-1] > mightTouchFrac[i]) {
-							[mightTouchFrac[i-1], mightTouchFrac[i]] = [mightTouchFrac[i], mightTouchFrac[i-1]];
-							[mightTouchObj[i-1], mightTouchObj[i]] = [mightTouchObj[i], mightTouchObj[i-1]];
+							let tmp;
+							tmp = mightTouchFrac[i-1];
+							mightTouchFrac[i-1] = mightTouchFrac[i];
+							mightTouchFrac[i] = tmp;
+							tmp = mightTouchObj[i-1];
+							mightTouchObj[i-1] = mightTouchObj[i];
+							mightTouchObj[i] = tmp;
 							swapped = true;
 						}
 					}
