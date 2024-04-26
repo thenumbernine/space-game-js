@@ -58,7 +58,7 @@ const initDrawFrame = () => {
 		frames++;
 		thisTime = Date.now();
 		if (thisTime - lastTime > 1000) {
-			let fps = frames * 1000 / (thisTime - lastTime);
+			const fps = frames * 1000 / (thisTime - lastTime);
 			//console.log('fps', fps);
 			frames = 0;
 			lastTime = thisTime;
@@ -500,7 +500,7 @@ void main() {
 	}
 
 	reset() {
-		let initialDataF32 = new Float32Array(this.texSize * this.texSize * 4);
+		const initialDataF32 = new Float32Array(this.texSize * this.texSize * 4);
 		for (let i = 0; i < this.texSize * this.texSize * 4; ++i) {
 			initialDataF32[i] = Infinity;
 		}
@@ -546,11 +546,7 @@ void main() {
 		gl.vertexAttribPointer(this.updatePosShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-		{
-			let tmp = this.posTex;
-			this.posTex = this.float4ScratchTex;
-			this.float4ScratchTex = tmp;
-		}
+		[this.posTex, this.float4ScratchTex] = [this.float4ScratchTex, this.posTex];
 		this.fbo.unbind();
 
 		//update shot velocity
@@ -575,11 +571,7 @@ void main() {
 		gl.vertexAttribPointer(this.updateVelShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-		{
-			let tmp = this.velTex;
-			this.velTex = this.float4ScratchTex;
-			this.float4ScratchTex = tmp;
-		}
+		[this.velTex, this.float4ScratchTex] = [this.float4ScratchTex, this.velTex];
 		this.fbo.unbind();
 
 		//done with texunit1
@@ -623,11 +615,7 @@ void main() {
 			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
 			//swap current reduce texture and reduce fbo target tex
-			{
-				let tmp = this.float4ScratchTex;
-				this.float4ScratchTex = this.reduceTex;
-				this.reduceTex = tmp;
-			}
+			[this.float4ScratchTex, this.reduceTex] = [this.reduceTex, this.float4ScratchTex];
 			this.fbo.unbind();
 
 			shader = this.collisionReduceShader;
@@ -652,14 +640,14 @@ void main() {
 		gl.vertexAttribPointer(encodeShader.attrs.texCoord.loc, 2, gl.FLOAT, false, 0, 0);
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-		let uint8Result = new Uint8Array(4);
+		const uint8Result = new Uint8Array(4);
 		gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, uint8Result);
 
 		this.fbo.unbind();
 
-		let float32Result = new Float32Array(uint8Result.buffer);
+		const float32Result = new Float32Array(uint8Result.buffer);
 		gl.viewport(0, 0, this.nx, this.nx);
-		let result = float32Result[0];
+		const result = float32Result[0];
 
 		if (result > 0) {
 			if (game.player !== undefined) {
@@ -847,18 +835,18 @@ class Game {
 
 			if (true) {	//GroupEnemy
 
-				let theta = Math.random() * Math.PI * 2;
-				let vel = vec3.fromValues(Math.cos(theta), Math.sin(theta), 1);
-				let groupCenter = vec3.fromValues(
+				const theta = Math.random() * Math.PI * 2;
+				const vel = vec3.fromValues(Math.cos(theta), Math.sin(theta), 1);
+				const groupCenter = vec3.fromValues(
 					rand(worldBounds.min[0] + 2, worldBounds.max[0] - 2),
 					rand(worldBounds.min[1] + 2, worldBounds.max[1] - 2),
 					worldBounds.min[2] + 1);
-				let spread = 1.5;
-				let waveSize = Math.floor(rand(2,6));
-				let group = [];
+				const spread = 1.5;
+				const waveSize = Math.floor(rand(2,6));
+				const group = [];
 				for (let i = 0; i < waveSize; ++i) {
-					let groupAngle = i / waveSize * Math.PI * 2;
-					let enemy = new GroupEnemy({
+					const groupAngle = i / waveSize * Math.PI * 2;
+					const enemy = new GroupEnemy({
 						group : group,
 						pos : vec3.fromValues(
 							groupCenter[0] + spread * Math.cos(groupAngle),
@@ -903,9 +891,9 @@ class Star {
 		game.stars.push(this);
 	}
 	resetXY() {
-		let angle = Math.random() * Math.PI * 2;
-		let maxBounds = Math.max(worldBounds.max[0], worldBounds.max[1]);
-		let r = rand(maxBounds * 10, maxBounds * 30);
+		const angle = Math.random() * Math.PI * 2;
+		const maxBounds = Math.max(worldBounds.max[0], worldBounds.max[1]);
+		const r = rand(maxBounds * 10, maxBounds * 30);
 		this.pos[0] = Math.cos(angle) * r;
 		this.pos[1] = Math.sin(angle) * r;
 	}
@@ -926,8 +914,8 @@ Star.prototype.scale = 1;
 Star.prototype.zMin = worldBounds.min[2] * 10;
 Star.prototype.zMax = worldBounds.max[2] + 10;
 
-let mightTouchObj = [];
-let mightTouchFrac = [];
+const mightTouchObj = [];
+const mightTouchFrac = [];
 let mightTouchLength = 0;
 class GameObject {
 	constructor(args) {
@@ -942,13 +930,13 @@ class GameObject {
 	}
 	update(dt) {
 		//trace movement
-		let startX = this.pos[0];
-		let startY = this.pos[1];
-		let startZ = this.pos[2];
+		const startX = this.pos[0];
+		const startY = this.pos[1];
+		const startZ = this.pos[2];
 
-		let deltaX = this.vel[0] * dt;
-		let deltaY = this.vel[1] * dt;
-		let deltaZ = this.vel[2] * dt;
+		const deltaX = this.vel[0] * dt;
+		const deltaY = this.vel[1] * dt;
+		const deltaZ = this.vel[2] * dt;
 
 		let destX = startX + deltaX;
 		let destY = startY + deltaY;
@@ -957,18 +945,18 @@ class GameObject {
 		if (this.touch) {
 			mightTouchLength = 0;
 			for (let i = 0; i < game.objs.length; ++i) {
-				let o = game.objs[i];
+				const o = game.objs[i];
 				if (o.remove) continue;
 				if (o == this) continue;
 
 				//for now assume we're quads ...
-				let frac = (o.pos[2] - startZ) / deltaZ;
+				const frac = (o.pos[2] - startZ) / deltaZ;
 				if (frac < 0 || frac > 1) continue;
 
-				let x = startX + frac * deltaX;
-				let y = startY + frac * deltaY;
-				let dx = x - o.pos[0];
-				let dy = y - o.pos[1];
+				const x = startX + frac * deltaX;
+				const y = startY + frac * deltaY;
+				const dx = x - o.pos[0];
+				const dy = y - o.pos[1];
 				if (Math.abs(dx) < (this.scale + o.scale) * .5 &&
 					Math.abs(dy) < (this.scale + o.scale) * .5)
 				{
@@ -987,26 +975,21 @@ class GameObject {
 					swapped = false;
 					for (let i = 1; i < mightTouchLength; ++i) {
 						if (mightTouchFrac[i-1] > mightTouchFrac[i]) {
-							let tmp;
-							tmp = mightTouchFrac[i-1];
-							mightTouchFrac[i-1] = mightTouchFrac[i];
-							mightTouchFrac[i] = tmp;
-							tmp = mightTouchObj[i-1];
-							mightTouchObj[i-1] = mightTouchObj[i];
-							mightTouchObj[i] = tmp;
+							[mightTouchFrac[i-1], mightTouchFrac[i]] = [mightTouchFrac[i], mightTouchFrac[i-1]];
+							[mightTouchObj[i-1], mightTouchObj[i]] = [mightTouchObj[i], mightTouchObj[i-1]];
 							swapped = true;
 						}
 					}
 				} while (swapped);
-				//mightTouch.sort(function(a,b) { return a.frac - b.frac; });
+				//mightTouch.sort((a,b) => { return a.frac - b.frac; });
 
 				for (let i = 0; i < mightTouchLength; ++i) {
-					let o = mightTouchObj[i];
-					let f = mightTouchFrac[i];
+					const o = mightTouchObj[i];
+					const f = mightTouchFrac[i];
 					this.pos[0] = startX + deltaX * f;
 					this.pos[1] = startY + deltaY * f;
 					this.pos[2] = startZ + deltaZ * f;
-					let stopped = this.touch(o);
+					const stopped = this.touch(o);
 					if (this.remove) return;
 					if (stopped) {
 						destX = this.pos[0];
@@ -1167,7 +1150,7 @@ class TurretEnemy extends Enemy {
 		}
 
 		if (this.shootState) {
-			let speed = 5;
+			const speed = 5;
 
 			//fire off a few shots
 			let dx = 0;
@@ -1178,7 +1161,7 @@ class TurretEnemy extends Enemy {
 				dx = game.player.pos[0] - this.pos[0];
 				dy = game.player.pos[1] - this.pos[1];
 				dz = game.player.pos[2] - this.pos[2];
-				let s = 1/Math.sqrt(dx * dx + dy * dy + dz * dz);
+				const s = 1/Math.sqrt(dx * dx + dy * dy + dz * dz);
 				dx *= s;
 				dy *= s;
 				dz *= s;
@@ -1205,22 +1188,22 @@ class TurretEnemy extends Enemy {
 				az *= l;
 			}
 
-			let iMaxRadius = 5;
+			const iMaxRadius = 5;
 			//for (let iradius = 0; iradius < iMaxRadius; ++iradius)
 			{
-				let iradius = this.shootState - 1;
-				let iMaxTheta = 2 * iradius * iradius + 1;
-				let radius = iradius / iMaxRadius;
+				const iradius = this.shootState - 1;
+				const iMaxTheta = 2 * iradius * iradius + 1;
+				const radius = iradius / iMaxRadius;
 
 				for (let itheta = 0; itheta < iMaxTheta; ++itheta) {
-					let theta = (itheta + .5) / iMaxTheta * Math.PI * 2;
-					let u = Math.cos(theta) * radius;
-					let v = Math.sin(theta) * radius;
+					const theta = (itheta + .5) / iMaxTheta * Math.PI * 2;
+					const u = Math.cos(theta) * radius;
+					const v = Math.sin(theta) * radius;
 
 					//TODO calc so that all shots meet at player at the same time despite 1/30 frame delay between them
-					let accelPerp = 0;//.25 * radius;
-					let accelTang = 0;//.25 * radius;
-					let accel = vec3.fromValues(
+					const accelPerp = 0;//.25 * radius;
+					const accelTang = 0;//.25 * radius;
+					const accel = vec3.fromValues(
 						dx * accelPerp + accelTang * (ax * u + bx * v),
 						dy * accelPerp + accelTang * (ay * u + by * v),
 						dz * accelPerp + accelTang * (az * u + bz * v));
@@ -1258,8 +1241,8 @@ class GroupEnemy extends Enemy {
 		if (this.group !== undefined) {
 			this.groupCenter = vec3.create();
 			this.updateGroupCenter();
-			let deltaX = this.pos[0] - this.groupCenter[0];
-			let deltaY = this.pos[1] - this.groupCenter[1];
+			const deltaX = this.pos[0] - this.groupCenter[0];
+			const deltaY = this.pos[1] - this.groupCenter[1];
 			this.vel[0] += -deltaY;
 			this.vel[1] += deltaX;
 		}
@@ -1320,9 +1303,9 @@ class GroupEnemy extends Enemy {
 			// do some cool BOIDs routine
 			this.updateGroupCenter();
 			//now ... spin around it!
-			let deltaX = this.groupCenter[0] - this.pos[0];
-			let deltaY = this.groupCenter[1] - this.pos[1];
-			let deltaZ = this.groupCenter[2] - this.pos[2];
+			const deltaX = this.groupCenter[0] - this.pos[0];
+			const deltaY = this.groupCenter[1] - this.pos[1];
+			const deltaZ = this.groupCenter[2] - this.pos[2];
 			this.vel[0] += deltaX * .1;
 			this.vel[1] += deltaY * .1;
 			this.vel[2] += deltaZ * .1;
@@ -1356,14 +1339,14 @@ class Player extends Ship {
 		let deltaX = this.targetPos[0] - this.pos[0];
 		let deltaY = this.targetPos[1] - this.pos[1];
 		let deltaZ = this.targetPos[2] - this.pos[2];
-		let deltaLenSq = deltaX*deltaX + deltaY*deltaY + deltaZ*deltaZ;
+		const deltaLenSq = deltaX*deltaX + deltaY*deltaY + deltaZ*deltaZ;
 		if (deltaLenSq > .01*.01) {
-			let movement = this.speed * dt;
+			const movement = this.speed * dt;
 			if (deltaLenSq < movement * movement) {
 				vec2.copy(this.pos, this.targetPos);
 			} else {
-				let deltaLen = Math.sqrt(deltaLenSq);
-				let s = this.speed/deltaLen;	//don't factor in dt ... that'll be done by integration
+				const deltaLen = Math.sqrt(deltaLenSq);
+				const s = this.speed/deltaLen;	//don't factor in dt ... that'll be done by integration
 				deltaX *= s;
 				deltaY *= s;
 				deltaZ *= s;
@@ -1377,11 +1360,11 @@ class Player extends Ship {
 		super.update(dt, ...rest);
 
 		if (this.shooting) {
-			let velX = this.aimPos[0] - this.pos[0];
-			let velY = this.aimPos[1] - this.pos[1];
-			let velZ = this.aimPos[2] - this.pos[2];
-			let speed = 20;
-			let scalar = speed / Math.sqrt(velX*velX + velY*velY + velZ*velZ);
+			const velX = this.aimPos[0] - this.pos[0];
+			const velY = this.aimPos[1] - this.pos[1];
+			const velZ = this.aimPos[2] - this.pos[2];
+			const speed = 20;
+			const scalar = speed / Math.sqrt(velX*velX + velY*velY + velZ*velZ);
 			this.weapon.shoot(velX*scalar, velY*scalar, velZ*scalar, 0,0,0);
 		}
 	}
@@ -1391,9 +1374,9 @@ class Player extends Ship {
 	}
 	die(inflicter, attacker, ...rest) {
 		//add lots of explosion bits
-		let r = Math.random();
-		let g = Math.random() * r;
-		let b = Math.random() * g;
+		const r = Math.random();
+		const g = Math.random() * r;
+		const b = Math.random() * g;
 		for (let i = 0; i < 20; ++i) {
 			new Shrapnel({
 				pos : this.pos,
