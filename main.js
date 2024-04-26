@@ -1,4 +1,5 @@
 import {vec3, vec4} from '/js/gl-matrix-3.4.1/index.js';
+import {arrayRemove} from '/js/util.js';
 import {GLUtil} from '/js/gl-util.js';
 
 const rand = (min, max) => {
@@ -56,7 +57,7 @@ let lastTime = Date.now();
 const initDrawFrame = () => {
 	{
 		frames++;
-		thisTime = Date.now();
+		const thisTime = Date.now();
 		if (thisTime - lastTime > 1000) {
 			const fps = frames * 1000 / (thisTime - lastTime);
 			//console.log('fps', fps);
@@ -525,7 +526,7 @@ void main() {
 
 		this.fbo.bind();
 		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
-		this.fbo.check();
+		//this.fbo.check();
 
 		gl.activeTexture(gl.TEXTURE1);
 		gl.bindTexture(gl.TEXTURE_2D, this.velTex.obj);
@@ -553,7 +554,7 @@ void main() {
 
 		this.fbo.bind();
 		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
-		this.fbo.check();
+		//this.fbo.check();
 
 		gl.activeTexture(gl.TEXTURE1);
 		gl.bindTexture(gl.TEXTURE_2D, this.accelTex.obj);
@@ -598,7 +599,7 @@ void main() {
 			//bind scratch texture to fbo
 			this.fbo.bind();
 			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.float4ScratchTex.obj, 0);
-			this.fbo.check();
+			//this.fbo.check();
 
 			//setup shader
 			gl.useProgram(shader.obj);
@@ -626,7 +627,7 @@ void main() {
 
 		this.fbo.bind();
 		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.byte4ScratchTex.obj, 0);
-		this.fbo.check();
+		//this.fbo.check();
 		gl.viewport(0, 0, this.texSize, this.texSize);
 
 		gl.useProgram(encodeShader.obj);
@@ -1314,7 +1315,7 @@ class GroupEnemy extends Enemy {
 	die(...rest) {
 		super.die(...rest);
 		if (this.group !== undefined) {
-			this.group.remove(this);
+			arrayRemove.call(this.group, this);
 		}
 	}
 }
