@@ -101,8 +101,8 @@ void main() {
 }
 `,
 	fragmentCode : `
-in vec2 pos;
 uniform sampler2D tex;
+in vec2 pos;
 
 float shift_right(float v, float amt) {
 	v = floor(v) + 0.5;
@@ -334,12 +334,12 @@ void main() {
 }
 `,
 			fragmentCode : `
-in vec2 pos;
-out vec4 fragColor;
 uniform sampler2D posTex;
 uniform sampler2D velTex;
 uniform float dt;
 uniform vec3 playerPos;
+in vec2 pos;
+out vec4 fragColor;
 void main() {
 	vec3 oldPos = texture(posTex, pos).xyz;
 	vec4 shotVel = texture(velTex, pos);
@@ -389,11 +389,11 @@ void main() {
 }
 `,
 			fragmentCode : `
-in vec2 pos;
-out vec4 fragColor;
 uniform sampler2D velTex;
 uniform sampler2D accelTex;
 uniform float dt;
+in vec2 pos;
+out vec4 fragColor;
 void main() {
 	//preserve w, the shot's damage
 	//store it here because updatePos replaces the w of the pos for the collision flag
@@ -476,10 +476,10 @@ void main() {
 
 		this.drawShader = new glutil.Program({
 			vertexCode : `
-in vec2 vertex;
 uniform sampler2D posTex;
 uniform mat4 projMat;
 uniform float screenWidth;
+in vec2 vertex;
 void main() {
 	vec3 pos = texture(posTex, vertex).xyz;
 	gl_Position = projMat * vec4(pos, 1.);
