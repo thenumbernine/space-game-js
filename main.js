@@ -1,6 +1,6 @@
 import {vec3, vec4} from '/js/gl-matrix-3.4.1/index.js';
 import {arrayRemove} from '/js/util.js';
-import {GLUtil} from '/js/gl-util.js';
+import {GLUtil} from '/js/gl/gl.js';
 
 const rand = (min, max) => {
 	return Math.random() * (max - min) + min
